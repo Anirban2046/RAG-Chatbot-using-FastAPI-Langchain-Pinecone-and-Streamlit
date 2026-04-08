@@ -1,0 +1,22 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# env file
+/server/.env
+
+# Local runtime artifacts
+/server/ragchatbot.db
+/server/.cph/
+/server/uploaded_docs/
+/client/.client_state.json
+
+# UV lockfile (ignored because project uses requirements files)
+uv.lock

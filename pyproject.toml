@@ -1,0 +1,6 @@
+[project]
+name = "ragchatbot"
+version = "0.1.0"
+description = "RAG Chatbot using FastAPI, LangChain, Pinecone, and Streamlit"
+readme = "README.md"
+requires-python = ">=3.12"
