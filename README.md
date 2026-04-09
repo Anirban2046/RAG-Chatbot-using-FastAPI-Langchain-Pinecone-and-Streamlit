@@ -144,13 +144,19 @@ PINECONE_API_KEY=<your-pinecone-api-key>
 Additional runtime constants are defined in backend config/module code (for example Pinecone index name/region and CORS origins).
 
 ## Usage
+The application supports both no-login sessions and signed-in sessions. Use the sidebar Register and Sign In dialogs when you want persisted chat history, uploaded-document metadata, and profile management.
+
 1. Open the Streamlit UI.
-2. Register or sign in (optional but recommended for server-side persistence).
+2. Choose your access flow from the sidebar.
+	- Use Register to create a new account.
+	- Use Sign In to open the login dialog for an existing account.
+	- Continue without signing in if you only need a temporary session.
 3. Upload one or more PDF files from the sidebar.
-4. Preview uploaded PDFs directly in the app to validate document content.
+4. Preview documents in the PDF dialog to validate content before querying.
 5. Remove individual PDFs one by one from the uploaded list when needed.
 6. Ask questions in the chat input; responses are generated from indexed document context.
-7. Review ongoing conversation history and export it via the download action.
-8. Update profile details from the profile dialog when needed.
+7. Use the Clear Chat action in the sidebar to reset the current conversation and start a fresh page state.
+8. Review ongoing conversation history and export it via the download action.
+9. Update profile details from the profile dialog when signed in.
 
 Internal query lifecycle: user question -> query embedding -> Pinecone top-k retrieval -> context injection into RetrievalQA prompt -> Groq LLaMA answer generation -> optional chat-turn persistence for authenticated users.
