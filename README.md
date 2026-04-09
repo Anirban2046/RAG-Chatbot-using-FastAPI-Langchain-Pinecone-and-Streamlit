@@ -22,7 +22,7 @@ This project implements an end-to-end RAG chatbot pipeline: a user submits a que
 | Auth and Security | passlib[argon2], python-jose[cryptography] | 1.7.4, 3.5.0 |
 
 ## Features
-- Multi-PDF ingestion with upload support from the Streamlit sidebar, including per-file delete/remove actions.
+- Multi-PDF ingestion with upload support from the Streamlit sidebar, including per-file deletion.
 - In-app PDF preview dialog with inline rendering and download option.
 - Document chunking and embedding pipeline for vector indexing.
 - Semantic similarity retrieval from Pinecone namespaces.
