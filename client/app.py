@@ -227,7 +227,7 @@ def open_profile_dialog():
     st.text(f"Email: {email}")
 
     st.markdown("<div style='height:0.5rem;'></div>", unsafe_allow_html=True)
-    if st.button("Edit Profile", use_container_width=True, key=f"edit_profile_btn_{st.session_state.profile_form_version}"):
+    if st.button("Edit Profile", width="stretch", key=f"edit_profile_btn_{st.session_state.profile_form_version}"):
         _open_edit_profile_dialog()
 
 
@@ -287,13 +287,13 @@ def render_auth_sidebar():
                 profile = profile_response.json()
                 st.session_state.current_profile = profile
                 st.divider()
-                if st.button(profile["username"], use_container_width=True, key="open_profile_btn"):
+                if st.button(profile["username"], width="stretch", key="open_profile_btn"):
                     _open_profile_dialog()
                 st.markdown(
                     f"<div style='font-size:0.82rem; color:#9ca3af; line-height:1.2; margin-bottom:24px; text-align:center;'>{profile['email'].replace('@', '&#64;')}</div>",
                     unsafe_allow_html=True,
                 )
-                if st.button("Logout", use_container_width=True, key="logout_btn"):
+                if st.button("Logout", width="stretch", key="logout_btn"):
                     clear_all_state(st.session_state)
                     st.rerun()
             else:
@@ -304,13 +304,13 @@ def render_auth_sidebar():
             st.divider()
             col1, col2 = st.columns(2, gap="small")
             with col1:
-                if st.button("Sign In", use_container_width=True, key="signin_btn"):
+                if st.button("Sign In", width="stretch", key="signin_btn"):
                     _open_signin_dialog()
             with col2:
-                if st.button("Register", use_container_width=True, key="register_btn"):
+                if st.button("Register", width="stretch", key="register_btn"):
                     _open_register_dialog()
 
-        if st.button("Clear Chat", use_container_width=True, key="clear_chat_btn"):
+        if st.button("Clear Chat", width="stretch", key="clear_chat_btn"):
             response = clear_vectorstore_api(
                 token=st.session_state.get("auth_token"),
                 client_id=st.session_state.get("client_id"),

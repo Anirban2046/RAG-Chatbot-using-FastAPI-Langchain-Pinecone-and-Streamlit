@@ -23,7 +23,7 @@ def show_pdf_preview_dialog(filename: str, token: str | None, client_id: str | N
         data=response.content,
         file_name=filename,
         mime="application/pdf",
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -46,5 +46,5 @@ def render_uploader():
     if st.session_state.get("uploaded_docs"):
         st.sidebar.caption("Uploaded PDFs in this session")
         for idx, name in enumerate(st.session_state["uploaded_docs"]):
-            if st.sidebar.button(f"{name}", key=f"preview_pdf_{idx}_{name}", use_container_width=True):
+            if st.sidebar.button(f"{name}", key=f"preview_pdf_{idx}_{name}", width="stretch"):
                 show_pdf_preview_dialog(name, token, client_id)
