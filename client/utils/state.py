@@ -1,8 +1,4 @@
-import json
-from pathlib import Path
 from uuid import uuid4
-
-STATE_FILE = Path(__file__).resolve().parents[1] / ".client_state.json"
 
 DEFAULT_STATE = {
     "auth_token": None,
@@ -18,30 +14,13 @@ def _generate_client_id() -> str:
 
 
 def load_state():
-    if not STATE_FILE.exists():
-        return DEFAULT_STATE.copy()
-
-    try:
-        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return DEFAULT_STATE.copy()
-
-    state = DEFAULT_STATE.copy()
-    for key in state:
-        if key in data:
-            state[key] = data[key]
-    return state
+    return DEFAULT_STATE.copy()
 
 
 def save_state(state):
-    payload = {
-        "auth_token": state.get("auth_token"),
-        "auth_username": state.get("auth_username"),
-        "client_id": state.get("client_id"),
-        "messages": state.get("messages", []),
-        "uploaded_docs": state.get("uploaded_docs", []),
-    }
-    STATE_FILE.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
+    # Intentionally no-op in deployed Streamlit environments.
+    # Writing shared server-side files leaks one visitor's state to others.
+    return None
 
 
 def sync_session_from_disk(session_state):
