@@ -23,6 +23,7 @@ This project implements an end-to-end RAG chatbot pipeline: a user submits a que
 
 ## Features
 - Multi-PDF ingestion with upload support from the Streamlit sidebar, including per-file deletion.
+- Sidebar authentication dialogs for Register and Sign In.
 - In-app PDF preview dialog with inline rendering and download option.
 - Document chunking and embedding pipeline for vector indexing.
 - Semantic similarity retrieval from Pinecone namespaces.
