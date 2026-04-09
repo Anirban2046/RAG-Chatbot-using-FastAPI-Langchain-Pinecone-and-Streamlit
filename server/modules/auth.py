@@ -53,13 +53,19 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     )
     try:
         payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
-        username = payload.get("sub")
-        if username is None:
+        subject = payload.get("sub")
+        if subject is None:
             raise credentials_exception
     except JWTError as exc:
         raise credentials_exception from exc
 
-    user = db.query(User).filter(User.username == username).first()
+    user = None
+    try:
+        user_id = int(subject)
+        user = db.query(User).filter(User.id == user_id).first()
+    except (TypeError, ValueError):
+        user = db.query(User).filter(User.username == subject).first()
+
     if user is None:
         raise credentials_exception
     return user
@@ -74,10 +80,16 @@ def get_current_user_optional(
 
     try:
         payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
-        username = payload.get("sub")
-        if username is None:
+        subject = payload.get("sub")
+        if subject is None:
             return None
     except JWTError:
         return None
 
-    return db.query(User).filter(User.username == username).first()
+    try:
+        user_id = int(subject)
+        user = db.query(User).filter(User.id == user_id).first()
+    except (TypeError, ValueError):
+        user = db.query(User).filter(User.username == subject).first()
+
+    return user

@@ -11,6 +11,7 @@ from routes.ask_question import router as ask_router
 from routes.auth import router as auth_router
 from routes.session_state import router as session_router
 from routes.upload_pdfs import router as upload_router
+from sqlalchemy import inspect, text
 
 
 
@@ -21,9 +22,25 @@ app=FastAPI(title="RAG Chatbot API",description="API for RAG Chatbot")
 def init_db():
     try:
         Base.metadata.create_all(bind=engine)
+        _ensure_user_profile_columns()
         logger.info("Database schema initialized")
     except Exception:
         logger.exception("Database initialization failed. Check DATABASE_URL and PostgreSQL server status.")
+
+
+def _ensure_user_profile_columns():
+    inspector = inspect(engine)
+    existing_columns = {column["name"] for column in inspector.get_columns("users")}
+    required_columns = {
+        "full_name": "ALTER TABLE users ADD COLUMN full_name VARCHAR(120)",
+        "profile_photo_filename": "ALTER TABLE users ADD COLUMN profile_photo_filename VARCHAR(255)",
+        "profile_photo_mime": "ALTER TABLE users ADD COLUMN profile_photo_mime VARCHAR(100)",
+    }
+
+    with engine.begin() as connection:
+        for column_name, ddl in required_columns.items():
+            if column_name not in existing_columns:
+                connection.execute(text(ddl))
 
 # CORS Setup
 app.add_middleware(

@@ -19,5 +19,7 @@ class AuthResponse(BaseModel):
 
 
 class UserProfile(BaseModel):
+    full_name: str | None = None
     username: str
     email: EmailStr
+    has_photo: bool = False

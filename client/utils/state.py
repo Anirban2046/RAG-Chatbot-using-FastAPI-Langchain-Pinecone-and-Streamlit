@@ -76,4 +76,7 @@ def clear_all_state(session_state):
     session_state["auth_username"] = None
     session_state["messages"] = []
     session_state["uploaded_docs"] = []
+    session_state["current_profile"] = None
+    session_state["profile_dialog_open"] = False
+    session_state["edit_profile_dialog_open"] = False
     save_state(session_state)

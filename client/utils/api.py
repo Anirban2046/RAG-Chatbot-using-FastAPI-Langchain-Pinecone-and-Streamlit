@@ -29,6 +29,10 @@ def get_my_profile(token: str):
     return requests.get(f"{API_URL}/auth/me", headers=_auth_headers(token))
 
 
+def get_profile_photo(token: str):
+    return requests.get(f"{API_URL}/auth/me/photo", headers=_auth_headers(token))
+
+
 def get_session_state(token: str):
     return requests.get(f"{API_URL}/session/state", headers=_auth_headers(token))
 
@@ -59,4 +63,21 @@ def get_pdf_preview_api(filename: str, token: str | None = None, client_id: str 
         f"{API_URL}/preview_pdf/",
         params={"filename": filename},
         headers=_auth_headers(token, client_id),
+    )
+
+
+def update_profile_api(
+    token: str,
+    data: dict,
+    photo=None,
+):
+    files = {"_multipart": ("", b"", "application/octet-stream")}
+    if photo is not None:
+        files = {"photo": (photo.name, photo.read(), photo.type or "application/octet-stream")}
+
+    return requests.patch(
+        f"{API_URL}/auth/me",
+        data=data,
+        files=files,
+        headers=_auth_headers(token),
     )

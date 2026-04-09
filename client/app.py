@@ -2,7 +2,15 @@ import streamlit as st
 from components.upload import render_uploader
 from components.history_download import render_history_download
 from components.chatUI import render_chat
-from utils.api import clear_vectorstore_api, get_my_profile, get_session_state, login_user, register_user
+from utils.api import (
+    clear_vectorstore_api,
+    get_my_profile,
+    get_profile_photo,
+    get_session_state,
+    login_user,
+    register_user,
+    update_profile_api,
+)
 from utils.state import clear_all_state, clear_chat_state, persist_session, sync_session_from_disk
 
 
@@ -14,6 +22,11 @@ def init_auth_state():
     sync_session_from_disk(st.session_state)
     st.session_state.setdefault("signin_form_version", 0)
     st.session_state.setdefault("register_form_version", 0)
+    st.session_state.setdefault("profile_form_version", 0)
+    st.session_state.setdefault("edit_profile_form_version", 0)
+    st.session_state.setdefault("profile_dialog_open", False)
+    st.session_state.setdefault("edit_profile_dialog_open", False)
+    st.session_state.setdefault("current_profile", None)
 
     if st.session_state.get("auth_token"):
         _hydrate_authenticated_state()
@@ -99,6 +112,28 @@ def _open_register_dialog():
     open_register_dialog()
 
 
+def _open_profile_dialog():
+    st.session_state.profile_form_version += 1
+    st.session_state.profile_dialog_open = True
+    st.rerun()
+
+
+def _open_edit_profile_dialog():
+    st.session_state.edit_profile_form_version += 1
+    st.session_state.edit_profile_dialog_open = True
+    st.session_state.profile_dialog_open = False
+    st.rerun()
+
+
+def _render_pending_profile_dialogs():
+    if st.session_state.get("edit_profile_dialog_open"):
+        st.session_state.edit_profile_dialog_open = False
+        open_edit_profile_dialog()
+    elif st.session_state.get("profile_dialog_open"):
+        st.session_state.profile_dialog_open = False
+        open_profile_dialog()
+
+
 @st.dialog("Sign In")
 def open_signin_dialog():
     form_version = st.session_state.signin_form_version
@@ -163,16 +198,99 @@ def open_register_dialog():
             st.error(error_msg)
 
 
+@st.dialog("User Profile", width="small")
+def open_profile_dialog():
+    profile = st.session_state.get("current_profile") or {}
+    token = st.session_state.get("auth_token")
+
+    display_name = profile.get("full_name") or profile.get("username") or "Not set"
+    username = profile.get("username") or "Not set"
+    email = profile.get("email") or "Not set"
+
+    if profile.get("has_photo") and token:
+        photo_response = get_profile_photo(token)
+        if photo_response.status_code == 200:
+            st.image(photo_response.content, width=128)
+        else:
+            st.markdown(
+                "<div style='font-size:4.5rem; line-height:1; text-align:left; padding:0.5rem 0 0.25rem;'>👤</div>",
+                unsafe_allow_html=True,
+            )
+    else:
+        st.markdown(
+            "<div style='font-size:4.5rem; line-height:1; text-align:left; padding:0.5rem 0 0.25rem;'>👤</div>",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(f"### {display_name}")
+    st.text(f"Username: {username}")
+    st.text(f"Email: {email}")
+
+    st.markdown("<div style='height:0.5rem;'></div>", unsafe_allow_html=True)
+    if st.button("Edit Profile", use_container_width=True, key=f"edit_profile_btn_{st.session_state.profile_form_version}"):
+        _open_edit_profile_dialog()
+
+
+@st.dialog("Edit Profile")
+def open_edit_profile_dialog():
+    profile = st.session_state.get("current_profile") or {}
+    token = st.session_state.get("auth_token")
+
+    form_version = st.session_state.edit_profile_form_version
+    with st.form("edit_profile_form", clear_on_submit=False):
+        full_name = st.text_input("Name", value=profile.get("full_name") or "", key=f"edit_full_name_{form_version}")
+        username = st.text_input("Username", value=profile.get("username") or "", key=f"edit_username_{form_version}")
+        email = st.text_input("Email", value=profile.get("email") or "", key=f"edit_email_{form_version}")
+        photo = st.file_uploader("Photo", type=["png", "jpg", "jpeg", "webp"], key=f"edit_photo_{form_version}")
+        password = st.text_input("New Password", type="password", autocomplete="new-password", key=f"edit_password_{form_version}")
+        confirm_password = st.text_input(
+            "Repeat New Password",
+            type="password",
+            autocomplete="new-password",
+            key=f"edit_confirm_password_{form_version}",
+        )
+        submitted = st.form_submit_button("Save Changes")
+
+    if submitted:
+        if password and password != confirm_password:
+            st.error("Passwords do not match")
+            return
+
+        response = update_profile_api(
+            token=token,
+            data={
+                "full_name": full_name,
+                "username": username,
+                "email": email,
+                "password": password,
+                "confirm_password": confirm_password,
+            },
+            photo=photo,
+        )
+        if response.status_code == 200:
+            updated_profile = response.json()
+            st.session_state.current_profile = updated_profile
+            st.session_state.auth_username = updated_profile.get("username", st.session_state.get("auth_username"))
+            if _hydrate_authenticated_state():
+                st.success("Profile updated successfully")
+                st.rerun()
+        else:
+            error_msg = _extract_error_message(response)
+            st.error(error_msg)
+
+
 def render_auth_sidebar():
     with st.sidebar:
         if st.session_state.auth_token:
             profile_response = get_my_profile(st.session_state.auth_token)
             if profile_response.status_code == 200:
                 profile = profile_response.json()
+                st.session_state.current_profile = profile
                 st.divider()
-                st.markdown(f"**👤 {profile['username']}**")
+                if st.button(profile["username"], use_container_width=True, key="open_profile_btn"):
+                    _open_profile_dialog()
                 st.markdown(
-                    f"<div style='font-size:0.82rem; color:#9ca3af; line-height:1.2; margin-bottom:24px;'>{profile['email']}</div>",
+                    f"<div style='font-size:0.82rem; color:#9ca3af; line-height:1.2; margin-bottom:24px; text-align:center;'>{profile['email'].replace('@', '&#64;')}</div>",
                     unsafe_allow_html=True,
                 )
                 if st.button("Logout", use_container_width=True, key="logout_btn"):
@@ -206,6 +324,7 @@ def render_auth_sidebar():
 
 init_auth_state()
 render_sidebar_auth_style()
+_render_pending_profile_dialogs()
 render_uploader()
 render_chat()
 render_history_download()
