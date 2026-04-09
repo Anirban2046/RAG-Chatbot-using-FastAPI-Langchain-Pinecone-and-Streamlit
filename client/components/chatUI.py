@@ -35,4 +35,9 @@ def render_chat():
             st.session_state.messages.append({"role":"assistant","content":answer})
             persist_session(st.session_state)
         else:
-            st.error(f"Error: {response.text}")
+            try:
+                error_data = response.json()
+                error_msg = error_data.get("error") or error_data.get("detail") or response.text
+            except Exception:
+                error_msg = response.text
+            st.error(error_msg)

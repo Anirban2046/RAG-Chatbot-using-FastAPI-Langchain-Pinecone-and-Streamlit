@@ -10,6 +10,7 @@ from pinecone import Pinecone, ServerlessSpec
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from logger import logger
 from config import (
     GOOGLE_API_KEY,
     PINECONE_API_KEY,
@@ -156,15 +157,22 @@ def _read_anonymous_activity() -> dict[str, float]:
 
 
 def _write_anonymous_activity(activity: dict[str, float]):
-    ANON_ACTIVITY_FILE.write_text(json.dumps(activity, ensure_ascii=True), encoding="utf-8")
+    try:
+        ANON_ACTIVITY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        ANON_ACTIVITY_FILE.write_text(json.dumps(activity, ensure_ascii=True), encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"Failed to write anonymous activity file: {str(e)}")
 
 
 def mark_namespace_active(namespace: str):
     if not namespace.startswith("anon-"):
         return
-    activity = _read_anonymous_activity()
-    activity[namespace] = time.time()
-    _write_anonymous_activity(activity)
+    try:
+        activity = _read_anonymous_activity()
+        activity[namespace] = time.time()
+        _write_anonymous_activity(activity)
+    except Exception as e:
+        logger.warning(f"Failed to mark namespace active: {str(e)}")
 
 
 def _remove_local_namespace_dir(namespace: str):
@@ -279,6 +287,8 @@ def rebuild_vectorstore_from_saved_pdfs(namespace: str, force_fallback: bool = F
     pdf_paths = sorted(str(path) for path in _namespace_upload_dir(namespace).glob("*.pdf"))
     if not pdf_paths:
         _safe_delete_all_vectors(namespace)
+        if force_fallback:
+            _set_embedding_mode(namespace, "fallback")
         return
     _build_index_from_files(pdf_paths, namespace=namespace, force_fallback=force_fallback)
 

@@ -11,10 +11,24 @@ from logger import logger
 from modules.auth import get_current_user_optional
 from modules.principal import resolve_namespace
 from models.user import User
-from middlewares.exception_handlers import internal_server_error_response
 
 
 router=APIRouter()
+
+
+def _run_anonymous_housekeeping(namespace: str, mark_active: bool) -> None:
+    try:
+        cleanup_stale_anonymous_namespaces()
+    except Exception as e:
+        logger.warning(f"Cleanup failed (non-fatal): {str(e)}")
+
+    if not mark_active:
+        return
+
+    try:
+        mark_namespace_active(namespace)
+    except Exception as e:
+        logger.warning(f"Mark namespace active failed (non-fatal): {str(e)}")
 
 @router.post("/upload_pdfs/")
 async def upload_pdfs(
@@ -22,21 +36,22 @@ async def upload_pdfs(
     user: User | None = Depends(get_current_user_optional),
     x_client_id: str | None = Header(default=None, alias="X-Client-Id"),
 ):
+    actor = "unknown"
     try:
         actor = user.username if user else "anonymous"
         namespace = resolve_namespace(user, x_client_id)
         if user is None:
-            cleanup_stale_anonymous_namespaces()
-            mark_namespace_active(namespace)
+            _run_anonymous_housekeeping(namespace, mark_active=True)
         logger.info(f"user={actor} uploaded files")
         load_vectorstore(files, namespace=namespace)
         logger.info("Document added to vectorstore")
         return {"messages":"Files processed and vectorstore updated"}
     except ValueError as e:
+        logger.error(f"ValueError for user={actor}: {str(e)}")
         return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
-        logger.exception("Error during PDF upload")
-        return internal_server_error_response()
+        logger.exception(f"Error during PDF upload for user={actor}")
+        return JSONResponse(status_code=400, content={"error": "Failed to upload files"})
 
 
 @router.post("/clear_vectorstore/")
@@ -44,15 +59,18 @@ async def clear_vectorstore_endpoint(
     user: User | None = Depends(get_current_user_optional),
     x_client_id: str | None = Header(default=None, alias="X-Client-Id"),
 ):
+    actor = "unknown"
     try:
+        actor = user.username if user else "anonymous"
         namespace = resolve_namespace(user, x_client_id)
         if user is None:
-            cleanup_stale_anonymous_namespaces()
+            _run_anonymous_housekeeping(namespace, mark_active=False)
         clear_vectorstore(namespace=namespace)
-        logger.info("Pinecone vector store cleared")
+        logger.info(f"Pinecone vector store cleared for user={actor}")
         return {"message": "Vector store cleared"}
     except ValueError as e:
+        logger.error(f"ValueError for user={actor}: {str(e)}")
         return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
-        logger.exception("Error clearing Pinecone vector store")
-        return internal_server_error_response()
+        logger.exception(f"Error clearing Pinecone vector store for user={actor}")
+        return JSONResponse(status_code=400, content={"error": "Failed to clear vector store"})
