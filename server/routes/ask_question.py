@@ -1,24 +1,28 @@
-from fastapi import APIRouter, Form, Depends, Header
+from fastapi import APIRouter, Depends, Form, Header
 from fastapi.responses import JSONResponse
-from modules.llm import get_llm_chain
-from modules.query_handlers import query_chain
 from langchain_core.documents import Document
 from langchain.schema import BaseRetriever
 from pinecone import Pinecone
 from pydantic import Field
+from sqlalchemy.orm import Session
 from typing import List
+
+from config import PINECONE_API_KEY, PINECONE_INDEX_NAME
+from db import get_db
 from logger import logger
 from modules.auth import get_current_user_optional
+from modules.llm import get_llm_chain
 from modules.load_vectorstore import (
-    _embed_query,
     EmbeddingQuotaExceeded,
-    rebuild_vectorstore_from_saved_pdfs,
+    _embed_query,
     cleanup_stale_anonymous_namespaces,
     mark_namespace_active,
+    rebuild_vectorstore_from_saved_pdfs,
 )
 from modules.principal import resolve_namespace
+from modules.query_handlers import query_chain
+from modules.user_content_store import save_chat_turn
 from models.user import User
-from config import PINECONE_API_KEY, PINECONE_INDEX_NAME
 
 router=APIRouter()
 NO_DOCS_ERROR = "No documents found. Please upload PDF files first to ask questions."
@@ -57,6 +61,7 @@ def _get_namespace_vector_count(index, namespace: str) -> int:
 async def ask_question(
     question: str = Form(...),
     user: User | None = Depends(get_current_user_optional),
+    db: Session = Depends(get_db),
     x_client_id: str | None = Header(default=None, alias="X-Client-Id"),
 ):
     actor = user.username if user else "anonymous"
@@ -138,6 +143,11 @@ async def ask_question(
         try:
             chain = get_llm_chain(retriever)
             result = query_chain(chain, question)
+            if user is not None:
+                try:
+                    save_chat_turn(db, user, question, result.get("response", ""))
+                except Exception as e:
+                    logger.warning(f"Failed to persist chat history for user={actor}: {str(e)}")
             logger.info("query successful")
             return result
         except Exception as e:

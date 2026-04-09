@@ -2,8 +2,8 @@ import streamlit as st
 from components.upload import render_uploader
 from components.history_download import render_history_download
 from components.chatUI import render_chat
-from utils.api import clear_vectorstore_api, login_user, register_user, get_my_profile
-from utils.state import sync_session_from_disk, persist_session, clear_chat_state, clear_all_state, clear_content_state
+from utils.api import clear_vectorstore_api, get_my_profile, get_session_state, login_user, register_user
+from utils.state import clear_all_state, clear_chat_state, persist_session, sync_session_from_disk
 
 
 st.set_page_config(page_title="AI RAG Chatbot", layout="wide")
@@ -19,6 +19,9 @@ def init_auth_state():
     if not st.session_state.anon_cleanup_done:
         _clear_anonymous_remote_vectorstore()
         st.session_state.anon_cleanup_done = True
+
+    if st.session_state.get("auth_token"):
+        _hydrate_authenticated_state()
 
 
 def render_sidebar_auth_style():
@@ -73,6 +76,24 @@ def _clear_anonymous_remote_vectorstore():
         pass
 
 
+def _hydrate_authenticated_state():
+    token = st.session_state.get("auth_token")
+    if not token:
+        return True
+
+    response = get_session_state(token)
+    if response.status_code != 200:
+        clear_all_state(st.session_state)
+        st.warning("Session expired. Please sign in again.")
+        return False
+
+    payload = response.json()
+    st.session_state.messages = payload.get("messages", [])
+    st.session_state.uploaded_docs = payload.get("uploaded_docs", [])
+    persist_session(st.session_state)
+    return True
+
+
 def _open_signin_dialog():
     st.session_state.signin_form_version += 1
     open_signin_dialog()
@@ -107,11 +128,9 @@ def open_signin_dialog():
             payload = response.json()
             st.session_state.auth_token = payload["access_token"]
             st.session_state.auth_username = payload["username"]
-            _clear_remote_vectorstore()
-            clear_content_state(st.session_state)
-            persist_session(st.session_state)
-            st.success("Signed in successfully")
-            st.rerun()
+            if _hydrate_authenticated_state():
+                st.success("Signed in successfully")
+                st.rerun()
         else:
             error_msg = _extract_error_message(response)
             st.error(error_msg)
@@ -143,11 +162,9 @@ def open_register_dialog():
             payload = response.json()
             st.session_state.auth_token = payload["access_token"]
             st.session_state.auth_username = payload["username"]
-            _clear_remote_vectorstore()
-            clear_content_state(st.session_state)
-            persist_session(st.session_state)
-            st.success("Registration successful")
-            st.rerun()
+            if _hydrate_authenticated_state():
+                st.success("Registration successful")
+                st.rerun()
         else:
             error_msg = _extract_error_message(response)
             st.error(error_msg)
@@ -166,7 +183,6 @@ def render_auth_sidebar():
                     unsafe_allow_html=True,
                 )
                 if st.button("Logout", use_container_width=True, key="logout_btn"):
-                    _clear_remote_vectorstore()
                     clear_all_state(st.session_state)
                     st.rerun()
             else:
@@ -184,9 +200,15 @@ def render_auth_sidebar():
                     _open_register_dialog()
 
         if st.button("Clear Chat", use_container_width=True, key="clear_chat_btn"):
-            _clear_remote_vectorstore()
-            clear_chat_state(st.session_state)
-            st.rerun()
+            response = clear_vectorstore_api(
+                token=st.session_state.get("auth_token"),
+                client_id=st.session_state.get("client_id"),
+            )
+            if response.status_code == 200:
+                clear_chat_state(st.session_state)
+                st.rerun()
+            else:
+                st.error(response.text)
 
 
 init_auth_state()

@@ -302,16 +302,18 @@ def load_vectorstore(uploaded_files, namespace: str):
         print("Gemini embedding quota exceeded; switching to fallback embeddings and rebuilding vector store.")
         rebuild_vectorstore_from_saved_pdfs(namespace=namespace, force_fallback=True)
 
+    return file_paths
+
 
 def clear_vectorstore(namespace: str):
     _safe_delete_all_vectors(namespace)
+    _remove_local_namespace_dir(namespace)
     if namespace.startswith("anon-"):
-        _remove_local_namespace_dir(namespace)
         activity = _read_anonymous_activity()
         if namespace in activity:
             activity.pop(namespace, None)
             _write_anonymous_activity(activity)
-        EMBEDDING_MODE_BY_NAMESPACE.pop(namespace, None)
+    EMBEDDING_MODE_BY_NAMESPACE.pop(namespace, None)
 
 
 def _list_namespace_names() -> list[str]:

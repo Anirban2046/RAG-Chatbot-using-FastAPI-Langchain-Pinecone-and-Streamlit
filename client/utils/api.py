@@ -29,6 +29,10 @@ def get_my_profile(token: str):
     return requests.get(f"{API_URL}/auth/me", headers=_auth_headers(token))
 
 
+def get_session_state(token: str):
+    return requests.get(f"{API_URL}/session/state", headers=_auth_headers(token))
+
+
 def upload_pdfs_api(files, token: str | None = None, client_id: str | None = None):
     files_payload=[ ("files",(f.name,f.read(),"application/pdf")) for f in files]
     return requests.post(

@@ -1,13 +1,16 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from config import CORS_ALLOW_ORIGINS
+from db import Base, engine
+from logger import logger
 from middlewares.exception_handlers import catch_exception_middleware
-from routes.upload_pdfs import router as upload_router
+from models.content import ChatMessage, UploadedDocument  # noqa: F401
+from models.user import User  # noqa: F401
 from routes.ask_question import router as ask_router
 from routes.auth import router as auth_router
-from db import Base, engine
-from models.user import User  # noqa: F401
-from logger import logger
-from config import CORS_ALLOW_ORIGINS
+from routes.session_state import router as session_router
+from routes.upload_pdfs import router as upload_router
 
 
 
@@ -36,12 +39,7 @@ app.add_middleware(
 # middleware exception handlers
 app.middleware("http")(catch_exception_middleware)
 
-# routers
-
-# 0. auth
 app.include_router(auth_router)
-
-# 1. upload pdfs documents
 app.include_router(upload_router)
-# 2. asking query
 app.include_router(ask_router)
+app.include_router(session_router)
