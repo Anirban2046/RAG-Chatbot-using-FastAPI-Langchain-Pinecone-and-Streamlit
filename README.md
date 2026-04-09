@@ -1,203 +1,156 @@
-# RAG Chatbot using FastAPI, Langchain, Pinecone and Streamlit
+# RAG Chatbot
+Full-stack, multi-PDF Retrieval-Augmented Generation system with FastAPI, Streamlit, LangChain, Pinecone, and Groq-hosted LLaMA.
 
-## Project Overview
+## Overview
+This project implements an end-to-end RAG chatbot pipeline: a user submits a query from a Streamlit interface, the request is sent to a FastAPI backend, LangChain orchestrates retrieval and generation, embeddings are generated (Google Generative AI embeddings with a fallback strategy), semantic matches are fetched from Pinecone, and a Groq-hosted LLaMA model produces the final context-grounded response.
 
-This project is a full-stack Retrieval-Augmented Generation (RAG) chatbot with:
+## Tech Stack
+| Category | Technology | Version |
+|---|---|---|
+| Language Runtime | Python | >=3.12 |
+| Backend API | FastAPI | 0.135.3 |
+| ASGI Server | Uvicorn | 0.43.0 |
+| Frontend UI | Streamlit | 1.56.0 |
+| RAG Framework | LangChain stack (`langchain`, `langchain-core`, `langchain-community`) | 0.2.16, 0.2.40, 0.2.16 |
+| LLM Provider Integration | Groq via `langchain-groq` | 0.1.5 |
+| Embedding Integration | Google Generative AI via `langchain-google-genai` | 1.0.10 |
+| Vector Database SDK | Pinecone | 8.1.1 |
+| Relational Database | SQLite | 3 (via `sqlite:///./ragchatbot.db`) |
+| PDF Parsing | pypdf | 6.9.2 |
+| ORM | SQLAlchemy | 2.0.49 |
+| Data Validation | Pydantic | 2.12.5 |
+| Auth and Security | passlib[argon2], python-jose[cryptography] | 1.7.4, 3.5.0 |
 
-- FastAPI backend for authentication and RAG APIs.
-- Streamlit frontend for chat, PDF upload, and session UX.
-- LangChain-based retrieval + LLM orchestration.
-- Pinecone for vector search.
-- JWT auth for registered users.
-- Isolated anonymous user namespaces with stale-data cleanup.
+## Features
+- Multi-PDF ingestion with upload support from the Streamlit sidebar, including per-file delete/remove actions.
+- In-app PDF preview dialog with inline rendering and download option.
+- Document chunking and embedding pipeline for vector indexing.
+- Semantic similarity retrieval from Pinecone namespaces.
+- Context-aware response generation through a retrieval-augmented LLM chain.
+- Chat history persistence for authenticated users (database-backed).
+- Session-aware continuity for chat/doc state via client session persistence.
+- Editable user profiles (name, username, email, password, profile photo).
+- Separation between frontend UI, backend routes, and backend modules for maintainability.
 
-The app supports both anonymous and authenticated usage:
+## System Architecture
+1. Ingestion: user uploads one or more PDFs from Streamlit; backend stores files under namespace-scoped directories.
+2. Parsing and chunking: backend loads PDFs and splits content into retrievable chunks.
+3. Embedding: chunks are embedded using `models/gemini-embedding-001` (with fallback embedding mode on quota exhaustion).
+4. Indexing: vectors and metadata are upserted into Pinecone under a user/anonymous namespace.
+5. Query embedding: user question is embedded using the same namespace embedding strategy.
+6. Retrieval: top-k semantically similar chunks are queried from Pinecone.
+7. Generation: retrieved context is injected into a LangChain RetrievalQA prompt and answered by Groq-hosted `llama-3.3-70b-versatile`.
+8. Persistence: authenticated chat turns and uploaded document metadata are stored in SQLAlchemy-backed tables and restored through session endpoints.
 
-- Anonymous users are scoped by `X-Client-Id`.
-- Authenticated users are scoped by user id.
-- Upload and chat data are isolated per namespace.
+## Project Structure
+```text
+ragchatbot/
+├── main.py                          # Root entry point placeholder
+├── pyproject.toml                   # Project metadata and Python version constraint
+├── README.md                        # Project documentation
+├── client/                          # Streamlit frontend
+│   ├── app.py                       # Main Streamlit app (auth, profile, chat composition)
+│   ├── config.py                    # Frontend API base URL
+│   ├── requirements.txt             # Frontend dependencies
+│   ├── components/                  # UI feature components
+│   │   ├── chatUI.py                # Chat rendering and question submission
+│   │   ├── history_download.py      # Chat history export
+│   │   └── upload.py                # Multi-PDF upload and preview UI
+│   └── utils/                       # Frontend service/state utilities
+│       ├── api.py                   # HTTP client calls to backend endpoints
+│       └── state.py                 # Local session persistence and state helpers
+├── server/                          # FastAPI backend
+│   ├── config.py                    # Environment loading and backend constants
+│   ├── db.py                        # SQLAlchemy engine/session setup
+│   ├── logger.py                    # Logging configuration
+│   ├── main.py                      # FastAPI app initialization and router wiring
+│   ├── requirements.txt             # Backend dependencies
+│   ├── upload_pdfs.py               # Legacy upload helper utilities
+│   ├── middlewares/
+│   │   └── exception_handlers.py    # Centralized exception middleware
+│   ├── models/
+│   │   ├── content.py               # Chat and uploaded-document ORM models
+│   │   └── user.py                  # User ORM model
+│   ├── modules/                     # Core business logic modules
+│   │   ├── auth.py                  # JWT auth, hashing, principal extraction
+│   │   ├── llm.py                   # LangChain + Groq RetrievalQA chain builder
+│   │   ├── load_vectorstore.py      # PDF loading, embedding, Pinecone indexing/cleanup
+│   │   ├── pdf_handlers.py          # File save helper for uploaded PDFs
+│   │   ├── principal.py             # Namespace resolution (user vs anonymous)
+│   │   ├── profile_store.py         # Profile photo storage helpers
+│   │   ├── query_handlers.py        # Chain execution wrapper
+│   │   └── user_content_store.py    # Persist/retrieve user chat and upload metadata
+│   ├── routes/                      # API endpoints
+│   │   ├── ask_question.py          # RAG query endpoint
+│   │   ├── auth.py                  # Register/login/profile endpoints
+│   │   ├── session_state.py         # Authenticated state hydration endpoint
+│   │   └── upload_pdfs.py           # Upload, preview, delete, clear endpoints
+│   ├── schemas/
+│   │   └── auth.py                  # Pydantic request/response schemas
+│   └── uploaded_docs/               # Namespace-scoped uploaded files and profile photos
+└── .venv/                           # Local virtual environment (developer-local)
+```
 
-## Technologies Used
-
-| Category | Technology | Purpose |
-| --- | --- | --- |
-| Frontend Framework | Streamlit | Builds the web chat UI and sidebar workflows. |
-| Backend Framework | FastAPI | Exposes auth, upload, query, and vectorstore management APIs. |
-| Backend Server | Uvicorn | ASGI server for running the FastAPI app. |
-| Authentication | JWT (python-jose) | Stateless access tokens for authenticated users. |
-| Password Security | Passlib (Argon2) | Secure password hashing and verification. |
-| ORM / Data Access | SQLAlchemy | User model persistence and DB session management. |
-| Primary Database | SQLite (default) | Stores user accounts and auth metadata. |
-| Vector Database | Pinecone | Stores and searches document embeddings by namespace. |
-| LLM Orchestration | LangChain | Retrieval pipeline and prompt/chain management. |
-| Embeddings | Google Generative AI Embeddings | Converts document chunks and queries into vectors. |
-| Chat Model | Groq (Llama model via LangChain) | Generates final grounded answers from retrieved context. |
-| Document Parsing | PyPDFLoader (LangChain Community) | Loads PDF content for chunking and indexing. |
-| Language | Python | Main implementation language for client and server. |
-
-## Architecture Summary
-
-### Backend (`server/`)
-
-- `main.py`: app bootstrap, CORS, router registration.
-- `routes/auth.py`: register, login, profile.
-- `routes/upload_pdfs.py`: upload and clear vectorstore APIs.
-- `routes/ask_question.py`: question-answering endpoint.
-- `modules/load_vectorstore.py`: PDF parsing, chunking, embeddings, Pinecone upsert/query support, anonymous cleanup.
-- `modules/auth.py`: password hashing and JWT handling.
-- `db.py`, `models/user.py`: SQLAlchemy setup and user model.
-
-### Frontend (`client/`)
-
-- `app.py`: Streamlit app shell, auth dialogs, sidebar actions.
-- `components/`: chat UI, uploader, history/download.
-- `utils/api.py`: API calls to backend.
-- `utils/state.py`: local client/session state persistence.
-
-## Key Features
-
-- Register/login with JWT.
-- Protected user profile endpoint (`/auth/me`).
-- Upload multiple PDFs and query them via RAG.
-- Namespaced retrieval for user isolation.
-- Anonymous namespace TTL cleanup to control Pinecone/storage growth.
-- Safer error handling (no raw server exception details in API responses).
-- Tightened CORS allowlist.
-
-## Prerequisites
-
-- Python 3.12+
-- Pinecone account + API key
-- Google API key (embeddings)
-- Groq API key (LLM)
-
-## Setup
-
-### 1. Create/activate virtual environment
-
+## Setup & Installation
+1. Clone the repository and enter the project:
 ```bash
-cd /path/to/ragchatbot
-python -m venv .venv
+git clone <your-repo-url>
+cd ragchatbot
+```
+
+2. Create and activate a virtual environment:
+```bash
+python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-### 2. Install dependencies
-
-Backend:
-
+3. Install backend and frontend dependencies:
 ```bash
-cd server
-pip install -r requirements.txt
+pip install -r server/requirements.txt
+pip install -r client/requirements.txt
 ```
 
-Client:
+4. Create a `.env` file in `server/` (see Environment Variables section).
 
-```bash
-cd ../client
-pip install -r requirements.txt
-```
-
-Dependency notes:
-
-- Both `server/requirements.txt` and `client/requirements.txt` are version-pinned for reproducible installs.
-- `uv.lock` is intentionally ignored in this repository because dependency management is done via the two requirements files.
-
-## Environment Variables (`server/.env`)
-
-The backend currently expects only secret/private values in `.env`.
-
-First run:
-
-- Create `server/.env` before starting the backend, otherwise startup will fail due to missing required secrets.
-
-Example:
-
-```dotenv
-GOOGLE_API_KEY=your_google_api_key
-GROQ_API_KEY=your_groq_api_key
-PINECONE_API_KEY=your_pinecone_api_key
-JWT_SECRET_KEY=use_a_long_random_secret_at_least_32_chars
-```
-
-Notes:
-
-- Non-secret settings (such as DB URL, CORS origins, TTL defaults, index name) are currently defined in `server/config.py`.
-- Default DB is SQLite (`sqlite:///./ragchatbot.db`).
-- If you move non-secret settings back to env in future, update `server/config.py` accordingly.
-
-## Run the App
-
-### 1. Start FastAPI backend
-
+5. Start the backend API:
 ```bash
 cd server
 uvicorn main:app --reload
 ```
 
-Backend default URL: `http://127.0.0.1:8000`
-
-### 2. Start Streamlit frontend
-
+6. In a second terminal, start the Streamlit frontend:
 ```bash
 cd client
 streamlit run app.py
 ```
 
-Frontend default URL: `http://localhost:8501`
+## Environment Variables
+Create `server/.env` with the following keys:
 
-## API Endpoints
-
-### Auth
-
-- `POST /auth/register`
-- `POST /auth/login`
-- `GET /auth/me`
-
-### RAG
-
-- `POST /upload_pdfs/`
-- `POST /ask/`
-- `POST /clear_vectorstore/`
-
-## Data Isolation and Anonymous Cleanup
-
-- Authenticated namespace: `user-<id>`
-- Anonymous namespace: `anon-<client-id>`
-
-Anonymous cleanup behavior:
-
-- Active anonymous namespaces are marked with last-seen timestamps.
-- Stale anonymous namespaces are cleaned periodically using TTL + interval logic.
-- Cleanup removes both Pinecone vectors and local uploaded docs for stale anonymous namespaces.
-
-This prevents one anonymous user from deleting another user's active data while still controlling storage growth.
-
-## Troubleshooting
-
-### `Address already in use` on port 8000
-
-```bash
-lsof -nP -iTCP:8000 -sTCP:LISTEN
-kill <pid>
+```env
+JWT_SECRET_KEY=<your-strong-random-secret-min-32-chars>
+GOOGLE_API_KEY=<your-google-generative-ai-api-key>
+GROQ_API_KEY=<your-groq-api-key>
+PINECONE_API_KEY=<your-pinecone-api-key>
 ```
 
-Or run backend on a different port:
+| Key | Example Placeholder | Description |
+|---|---|---|
+| `JWT_SECRET_KEY` | `<strong-random-secret>` | Secret used to sign/verify JWT access tokens. |
+| `GOOGLE_API_KEY` | `<google-api-key>` | Credential for Google Generative AI embedding requests. |
+| `GROQ_API_KEY` | `<groq-api-key>` | Credential for Groq LLM inference (`llama-3.3-70b-versatile`). |
+| `PINECONE_API_KEY` | `<pinecone-api-key>` | Credential for Pinecone vector index operations. |
 
-```bash
-uvicorn main:app --reload --port 8001
-```
+Additional runtime constants are defined in backend config/module code (for example Pinecone index name/region and CORS origins).
 
-### Missing environment variable errors
+## Usage
+1. Open the Streamlit UI.
+2. Register or sign in (optional but recommended for server-side persistence).
+3. Upload one or more PDF files from the sidebar.
+4. Preview uploaded PDFs directly in the app to validate document content.
+5. Remove individual PDFs one by one from the uploaded list when needed.
+6. Ask questions in the chat input; responses are generated from indexed document context.
+7. Review ongoing conversation history and export it via the download action.
+8. Update profile details from the profile dialog when needed.
 
-Ensure `server/.env` exists and includes all required secret keys.
-
-### Invalid JWT secret
-
-`JWT_SECRET_KEY` must be strong and at least 32 characters.
-
-## Security Notes
-
-- Do not commit real API keys or production secrets.
-- Rotate exposed keys immediately.
-- Use separate keys and secrets for dev/staging/prod.
-
+Internal query lifecycle: user question -> query embedding -> Pinecone top-k retrieval -> context injection into RetrievalQA prompt -> Groq LLaMA answer generation -> optional chat-turn persistence for authenticated users.
