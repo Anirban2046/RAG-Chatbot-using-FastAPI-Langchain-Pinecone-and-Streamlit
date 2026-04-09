@@ -30,8 +30,8 @@ def save_state(state):
 
 
 def sync_session_from_disk(session_state):
-    # Restore client_id from browser storage (query params as fallback to localStorage).
-    # This persists the client_id across page refreshes, so anonymous users can access their uploads.
+    # Restore anonymous client_id/messages/docs from cookie-scoped server memory.
+    # This survives browser refresh and is cleared on app restart.
     stored_client_id = get_client_id_from_storage()
     if stored_client_id:
         session_state["client_id"] = stored_client_id
@@ -40,10 +40,9 @@ def sync_session_from_disk(session_state):
         session_state["client_id"] = new_client_id
         set_client_id_in_storage(new_client_id)
     else:
-        # Client ID already in session_state, ensure it's stored for next refresh
         set_client_id_in_storage(session_state["client_id"])
     
-    # Restore auth_token from browser storage if present.
+    # Auth token is intentionally session-only (never persisted to URL/query params).
     stored_token = get_auth_token_from_storage()
     if stored_token:
         session_state["auth_token"] = stored_token
@@ -52,8 +51,8 @@ def sync_session_from_disk(session_state):
     
     session_state.setdefault("auth_username", None)
     
-    # For anonymous users (no auth_token), restore messages and uploaded_docs from browser storage.
-    # For authenticated users, these will be fetched from the backend during _hydrate_authenticated_state().
+    # Anonymous messages/docs are restored from cookie-scoped server memory.
+    # Authenticated messages/docs are fetched from the backend during _hydrate_authenticated_state().
     is_anonymous = not session_state.get("auth_token")
     if is_anonymous:
         stored_messages = get_messages_from_storage()
@@ -90,6 +89,7 @@ def persist_session(session_state):
 def clear_chat_state(session_state):
     session_state["messages"] = []
     session_state["uploaded_docs"] = []
+    session_state["hide_welcome"] = False
     # Also clear from browser storage for anonymous users
     is_anonymous = not session_state.get("auth_token")
     if is_anonymous:
@@ -101,6 +101,7 @@ def clear_chat_state(session_state):
 def clear_content_state(session_state):
     session_state["messages"] = []
     session_state["uploaded_docs"] = []
+    session_state["hide_welcome"] = False
     save_state(session_state)
 
 
@@ -112,5 +113,5 @@ def clear_all_state(session_state):
     session_state["current_profile"] = None
     session_state["profile_dialog_open"] = False
     session_state["edit_profile_dialog_open"] = False
-    set_auth_token_in_storage(None)  # Clear auth token from browser storage
+    set_auth_token_in_storage(None)  # Hook no-op: token is not persisted to URL/browser storage.
     save_state(session_state)

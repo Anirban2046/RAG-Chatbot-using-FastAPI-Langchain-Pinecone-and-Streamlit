@@ -1,16 +1,18 @@
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Header, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.orm import Session
 from typing import List
 
+from config import PDF_MAX_FILE_BYTES, PDF_MAX_FILES_PER_REQUEST, PDF_MAX_TOTAL_BYTES
 from db import get_db
 from logger import logger
 from modules.auth import get_current_user_optional
 from modules.load_vectorstore import (
     UPLOAD_DIR,
+    _find_best_matching_file,
     cleanup_stale_anonymous_namespaces,
     clear_vectorstore,
     delete_pdf_from_vectorstore,
@@ -24,6 +26,40 @@ from models.user import User
 
 
 router = APIRouter()
+
+
+def _upload_size_bytes(upload: UploadFile) -> int:
+    current_pos = upload.file.tell()
+    upload.file.seek(0, 2)
+    size = upload.file.tell()
+    upload.file.seek(current_pos)
+    return int(size)
+
+
+def _validate_pdf_uploads(files: List[UploadFile]) -> None:
+    if len(files) > PDF_MAX_FILES_PER_REQUEST:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Too many files uploaded at once. Maximum allowed is {PDF_MAX_FILES_PER_REQUEST}.",
+        )
+
+    total_bytes = 0
+    for file in files:
+        file_size = _upload_size_bytes(file)
+        if file_size > PDF_MAX_FILE_BYTES:
+            max_mb = PDF_MAX_FILE_BYTES / (1024 * 1024)
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File '{file.filename}' is too large. Maximum allowed size is {max_mb:.1f} MB.",
+            )
+        total_bytes += file_size
+
+    if total_bytes > PDF_MAX_TOTAL_BYTES:
+        total_mb = PDF_MAX_TOTAL_BYTES / (1024 * 1024)
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Total upload size is too large. Maximum allowed total is {total_mb:.1f} MB.",
+        )
 
 
 def _run_anonymous_housekeeping(namespace: str, mark_active: bool) -> None:
@@ -57,6 +93,7 @@ async def upload_pdfs(
     try:
         actor = user.username if user else "anonymous"
         namespace = resolve_namespace(user, x_client_id)
+        _validate_pdf_uploads(files)
         if user is None:
             _run_anonymous_housekeeping(namespace, mark_active=True)
         stored_paths = load_vectorstore(files, namespace=namespace)
@@ -70,6 +107,8 @@ async def upload_pdfs(
     except ValueError as e:
         logger.error(f"ValueError for user={actor}: {str(e)}")
         return JSONResponse(status_code=400, content={"error": str(e)})
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"Error during PDF upload for user={actor}")
         return JSONResponse(status_code=400, content={"error": "Failed to upload files"})
@@ -128,10 +167,11 @@ async def preview_pdf(
                 candidate_path = namespace_dir / Path(record.stored_filename).name
 
         if candidate_path is None:
-            sanitized_name = _sanitize_filename(filename)
-            if not sanitized_name:
+            if not _sanitize_filename(filename):
                 return JSONResponse(status_code=404, content={"error": "PDF not found"})
-            candidate_path = namespace_dir / sanitized_name
+            candidate_path = _find_best_matching_file(namespace_dir, filename)
+            if candidate_path is None:
+                return JSONResponse(status_code=404, content={"error": "PDF not found"})
 
         if not candidate_path.exists() or not candidate_path.is_file():
             return JSONResponse(status_code=404, content={"error": "PDF not found"})

@@ -1,118 +1,126 @@
 """
-Manage client-side browser storage (localStorage) for persisting auth_token, client_id, messages, and uploaded_docs across page refreshes.
-This is safe: client_id is a random UUID (not sensitive), auth_token is a temporary JWT, and messages/docs are user-generated.
+Helpers for state persistence hooks.
+
+Sensitive values (auth token, client id, messages, uploaded docs) must not be written to
+URL query parameters because URLs are shareable and persisted in browser history.
+
+Anonymous continuity requirement:
+- Keep state across page refresh for the same browser session.
+- Drop state on app restart.
+
+Implementation note:
+- We use server-memory buckets keyed by a browser cookie fingerprint.
+- This avoids URL leakage and naturally clears when the Streamlit process restarts.
 """
 
+import hashlib
 import json
 import streamlit as st
-from uuid import uuid4
 
-# Inject a script that manages localStorage and communicates with Streamlit via query params or hidden element
+# Keep a tiny bootstrap script for compatibility with existing layout/init flow.
 STORAGE_SCRIPT = """
 <script>
-// Initialize client_id in localStorage if not present
-if (!localStorage.getItem('rag_client_id')) {
-    localStorage.setItem('rag_client_id', 'client-' + Math.random().toString(36).substr(2, 9));
-}
-
-// Initialize auth_token in localStorage if not present (will be set by login)
-if (!localStorage.getItem('rag_auth_token')) {
-    localStorage.setItem('rag_auth_token', '');
-}
+// Intentionally left minimal. Sensitive session state is stored server-side session only.
 </script>
 """
+
+_BROWSER_SESSION_STATE: dict[str, dict] = {}
+
+
+def _browser_scope_key() -> str | None:
+    """Derive a stable browser-session key from current request cookies."""
+    try:
+        cookies = dict(st.context.cookies)
+    except Exception:
+        return None
+
+    if not cookies:
+        return None
+
+    canonical = "|".join(f"{k}={cookies[k]}" for k in sorted(cookies.keys()))
+    if not canonical:
+        return None
+
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _get_bucket(create: bool = False) -> dict | None:
+    key = _browser_scope_key()
+    if not key:
+        return None
+
+    if key not in _BROWSER_SESSION_STATE:
+        if not create:
+            return None
+        _BROWSER_SESSION_STATE[key] = {}
+    return _BROWSER_SESSION_STATE[key]
 
 def inject_storage_script():
     """Inject localStorage initialization script."""
     st.markdown(STORAGE_SCRIPT, unsafe_allow_html=True)
 
 
-def get_client_id_from_storage() -> str | None:
-    """
-    Retrieve client_id from browser localStorage via query params or fallback.
-    Since Python can't directly read browser localStorage, we use a workaround:
-    - Store client_id in st.query_params
-    - This persists across page refreshes
-    """
-    # Check query params first
+def clear_legacy_query_params() -> None:
+    """Remove old query-param keys that previously carried sensitive state."""
     try:
-        client_id = st.query_params.get("_client_id")
-        if client_id:
-            return client_id
-    except (AttributeError, Exception):
+        for key in ("_client_id", "_auth_token", "_messages", "_uploaded_docs"):
+            if key in st.query_params:
+                del st.query_params[key]
+    except Exception:
         pass
-    return None
+
+
+def get_client_id_from_storage() -> str | None:
+    bucket = _get_bucket(create=False)
+    if not bucket:
+        return None
+    value = bucket.get("client_id")
+    return value if isinstance(value, str) and value else None
 
 
 def set_client_id_in_storage(client_id: str) -> None:
-    """Store client_id in query params so it persists across refreshes."""
-    try:
-        st.query_params["_client_id"] = client_id
-    except (AttributeError, Exception):
-        pass
+    bucket = _get_bucket(create=True)
+    if bucket is not None and client_id:
+        bucket["client_id"] = client_id
 
 
 def get_auth_token_from_storage() -> str | None:
-    """Retrieve auth_token from query params (as a workaround since Python can't read localStorage directly)."""
-    try:
-        token = st.query_params.get("_auth_token")
-        if token:
-            return token
-    except (AttributeError, Exception):
-        pass
+    """Sensitive state is not persisted in URL or browser-readable storage."""
     return None
 
 
 def set_auth_token_in_storage(token: str | None) -> None:
-    """Store auth_token in query params."""
-    try:
-        if token:
-            st.query_params["_auth_token"] = token
-        elif "_auth_token" in st.query_params:
-            del st.query_params["_auth_token"]
-    except (AttributeError, Exception):
-        pass
+    """No-op by design to prevent URL leakage."""
+    return None
 
 
 def get_messages_from_storage() -> list | None:
-    """Retrieve messages from browser storage (for anonymous users)."""
-    try:
-        messages_json = st.query_params.get("_messages")
-        if messages_json:
-            return json.loads(messages_json)
-    except (AttributeError, json.JSONDecodeError, Exception):
-        pass
-    return None
+    bucket = _get_bucket(create=False)
+    if not bucket:
+        return None
+    messages = bucket.get("messages")
+    if not isinstance(messages, list):
+        return None
+    return json.loads(json.dumps(messages, ensure_ascii=True))
 
 
 def set_messages_in_storage(messages: list) -> None:
-    """Store messages in browser storage (for anonymous users)."""
-    try:
-        if messages:
-            st.query_params["_messages"] = json.dumps(messages)
-        elif "_messages" in st.query_params:
-            del st.query_params["_messages"]
-    except (AttributeError, Exception):
-        pass
+    bucket = _get_bucket(create=True)
+    if bucket is not None:
+        bucket["messages"] = json.loads(json.dumps(messages, ensure_ascii=True))
 
 
 def get_uploaded_docs_from_storage() -> list | None:
-    """Retrieve uploaded_docs list from browser storage (for anonymous users)."""
-    try:
-        docs_json = st.query_params.get("_uploaded_docs")
-        if docs_json:
-            return json.loads(docs_json)
-    except (AttributeError, json.JSONDecodeError, Exception):
-        pass
-    return None
+    bucket = _get_bucket(create=False)
+    if not bucket:
+        return None
+    docs = bucket.get("uploaded_docs")
+    if not isinstance(docs, list):
+        return None
+    return json.loads(json.dumps(docs, ensure_ascii=True))
 
 
 def set_uploaded_docs_in_storage(docs: list) -> None:
-    """Store uploaded_docs list in browser storage (for anonymous users)."""
-    try:
-        if docs:
-            st.query_params["_uploaded_docs"] = json.dumps(docs)
-        elif "_uploaded_docs" in st.query_params:
-            del st.query_params["_uploaded_docs"]
-    except (AttributeError, Exception):
-        pass
+    bucket = _get_bucket(create=True)
+    if bucket is not None:
+        bucket["uploaded_docs"] = json.loads(json.dumps(docs, ensure_ascii=True))

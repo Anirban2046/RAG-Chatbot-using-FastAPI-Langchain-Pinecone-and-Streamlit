@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.orm import Session
+from config import PROFILE_PHOTO_MAX_BYTES
 from db import get_db
 from models.user import User
 from modules.auth import hash_password, authenticate_user, create_access_token, get_current_user
@@ -8,6 +9,14 @@ from schemas.auth import RegisterRequest, LoginRequest, AuthResponse, UserProfil
 from modules.profile_store import clear_profile_photo, save_profile_photo, profile_photo_path
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _upload_size_bytes(upload: UploadFile) -> int:
+    current_pos = upload.file.tell()
+    upload.file.seek(0, 2)
+    size = upload.file.tell()
+    upload.file.seek(current_pos)
+    return int(size)
 
 
 def _profile_response(user: User) -> UserProfile:
@@ -113,6 +122,12 @@ async def update_me(
         user.hashed_password = hash_password(password)
 
     if photo is not None and photo.filename:
+        if _upload_size_bytes(photo) > PROFILE_PHOTO_MAX_BYTES:
+            max_mb = PROFILE_PHOTO_MAX_BYTES / (1024 * 1024)
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"Profile photo is too large. Maximum allowed size is {max_mb:.1f} MB.",
+            )
         save_profile_photo(user, photo)
     elif photo is not None and not photo.filename:
         clear_profile_photo(user)

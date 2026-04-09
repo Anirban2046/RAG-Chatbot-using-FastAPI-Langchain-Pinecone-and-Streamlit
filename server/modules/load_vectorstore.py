@@ -3,6 +3,7 @@ import json
 import math
 import hashlib
 import re
+import shutil
 import time
 from pathlib import Path
 from tqdm.auto import tqdm
@@ -144,6 +145,73 @@ def _namespace_upload_dir(namespace: str) -> Path:
     return namespace_dir
 
 
+def _unique_path_for_filename(namespace_dir: Path, sanitized_name: str) -> Path:
+    candidate = namespace_dir / sanitized_name
+    if not candidate.exists():
+        return candidate
+
+    name_path = Path(sanitized_name)
+    stem = name_path.stem
+    suffix = name_path.suffix
+    counter = 1
+
+    while True:
+        candidate = namespace_dir / f"{stem}__{counter}{suffix}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def _find_best_matching_file(namespace_dir: Path, filename: str) -> Path | None:
+    requested_name = Path(filename).name
+    sanitized_name = re.sub(r"[^a-zA-Z0-9._-]", "_", requested_name)
+
+    exact_requested = namespace_dir / requested_name
+    if exact_requested.exists() and exact_requested.is_file():
+        return exact_requested
+
+    exact_sanitized = namespace_dir / sanitized_name
+    if exact_sanitized.exists() and exact_sanitized.is_file():
+        return exact_sanitized
+
+    stem = Path(sanitized_name).stem
+    suffix = Path(sanitized_name).suffix
+    pattern = f"{stem}__*{suffix}"
+    candidates = [path for path in namespace_dir.glob(pattern) if path.is_file()]
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0]
+
+
+def _finalize_staged_pdf(file_path: Path, staging_path: Path):
+    if not staging_path.exists():
+        return
+
+    if file_path.exists():
+        staging_path.unlink(missing_ok=True)
+        return
+
+    try:
+        staging_path.rename(file_path)
+        return
+    except Exception as rename_exc:
+        logger.warning(
+            f"Failed to restore staged PDF {staging_path.name} back to {file_path.name}: {str(rename_exc)}"
+        )
+
+    try:
+        shutil.copy2(staging_path, file_path)
+    except Exception as copy_exc:
+        logger.error(
+            f"Failed to recover staged PDF {staging_path.name} for {file_path.name}: {str(copy_exc)}"
+        )
+        raise
+    finally:
+        staging_path.unlink(missing_ok=True)
+
+
 def _read_anonymous_activity() -> dict[str, float]:
     if not ANON_ACTIVITY_FILE.exists():
         return {}
@@ -244,7 +312,7 @@ def _save_uploaded_files(uploaded_files, namespace: str):
         sanitized_name = re.sub(r"[^a-zA-Z0-9._-]", "_", original_name)
         if not sanitized_name:
             sanitized_name = f"upload-{int(time.time())}.pdf"
-        save_path = namespace_dir / sanitized_name
+        save_path = _unique_path_for_filename(namespace_dir, sanitized_name)
         with open(save_path, "wb") as f:
             f.write(file.file.read())
         file_paths.append(str(save_path))
@@ -308,29 +376,40 @@ def load_vectorstore(uploaded_files, namespace: str):
 def delete_pdf_from_vectorstore(namespace: str, filename: str):
     """Delete a single PDF and its vectors from Pinecone and filesystem"""
     try:
-        # Get the file stem (filename without extension) to match vector IDs
-        file_stem = Path(filename).stem
-        
-        # Delete vectors matching this file pattern: {stem}-0, {stem}-1, etc.
-        # Pinecone doesn't have a direct pattern match, so we delete by listing stats
-        # and finding vectors with matching metadata, or we use a simpler approach:
-        # delete by ID prefix pattern
-        try:
-            # Try to delete with prefix - some Pinecone API versions support this
-            index.delete(filter={"source": {"$eq": filename}}, namespace=namespace)
-        except Exception:
-            # Fallback: we'll just delete the file and rebuild the index
-            # This ensures consistency
-            pass
-        
-        # Delete the physical file
         namespace_dir = Path(UPLOAD_DIR) / namespace
-        file_path = namespace_dir / Path(filename).name
-        if file_path.exists() and file_path.is_file():
-            file_path.unlink()
-        
-        # Rebuild the vectorstore from remaining PDFs
-        rebuild_vectorstore_from_saved_pdfs(namespace)
+        file_path = _find_best_matching_file(namespace_dir, filename)
+
+        if file_path is None:
+            # If the file is already missing, keep vectors/files consistent with what is on disk.
+            rebuild_vectorstore_from_saved_pdfs(namespace)
+            return
+
+        staging_path = file_path.with_name(f"{file_path.name}.deleting-{int(time.time() * 1000)}")
+        file_path.rename(staging_path)
+
+        try:
+            # Rebuild from the remaining PDFs while the target file is staged out.
+            rebuild_vectorstore_from_saved_pdfs(namespace)
+        except Exception:
+            # Roll back the file and rebuild to restore the previous index state.
+            if staging_path.exists() and not file_path.exists():
+                try:
+                    staging_path.rename(file_path)
+                except Exception as restore_file_exc:
+                    logger.error(
+                        f"Failed to restore staged PDF {staging_path.name} for {filename}: {str(restore_file_exc)}"
+                    )
+                    raise
+            try:
+                rebuild_vectorstore_from_saved_pdfs(namespace)
+            except Exception as restore_exc:
+                logger.error(f"Rollback rebuild failed after delete error for {filename}: {str(restore_exc)}")
+            finally:
+                _finalize_staged_pdf(file_path, staging_path)
+            raise
+
+        if staging_path.exists():
+            _finalize_staged_pdf(file_path, staging_path)
         
     except Exception as e:
         logger.error(f"Error deleting PDF {filename} from vectorstore: {str(e)}")

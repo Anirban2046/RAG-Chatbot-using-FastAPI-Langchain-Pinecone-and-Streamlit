@@ -121,15 +121,24 @@ async def ask_question(
             logger.warning(f"Pinecone query for namespace={namespace} failed or returned no results: {str(e)}")
             return _no_docs_response()
 
-        docs = [
-            Document(
-                page_content=(match.get("metadata") or {}).get("text", ""),
-                metadata=(match.get("metadata") or {})
-            ) for match in res.get("matches", [])
-        ]
+        docs = []
+        for match in res.get("matches", []):
+            metadata = match.get("metadata") or {}
+            text = metadata.get("text")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            docs.append(
+                Document(
+                    page_content=text,
+                    metadata=metadata,
+                )
+            )
 
         if not docs:
-            logger.warning(f"No documents found in namespace={namespace}. User should upload PDFs first.")
+            logger.warning(
+                f"No usable documents found in namespace={namespace}; "
+                "matches were empty or missing text metadata."
+            )
             return _no_docs_response()
 
         class SimpleRetriever(BaseRetriever):
