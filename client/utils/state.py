@@ -1,5 +1,10 @@
 from uuid import uuid4
-from utils.browser_storage import get_client_id_from_storage, set_client_id_in_storage, get_auth_token_from_storage, set_auth_token_in_storage
+from utils.browser_storage import (
+    get_client_id_from_storage, set_client_id_in_storage,
+    get_auth_token_from_storage, set_auth_token_in_storage,
+    get_messages_from_storage, set_messages_in_storage,
+    get_uploaded_docs_from_storage, set_uploaded_docs_in_storage,
+)
 
 DEFAULT_STATE = {
     "auth_token": None,
@@ -46,17 +51,50 @@ def sync_session_from_disk(session_state):
         session_state.setdefault("auth_token", None)
     
     session_state.setdefault("auth_username", None)
-    session_state.setdefault("messages", [])
-    session_state.setdefault("uploaded_docs", [])
+    
+    # For anonymous users (no auth_token), restore messages and uploaded_docs from browser storage.
+    # For authenticated users, these will be fetched from the backend during _hydrate_authenticated_state().
+    is_anonymous = not session_state.get("auth_token")
+    if is_anonymous:
+        stored_messages = get_messages_from_storage()
+        if stored_messages is not None:
+            session_state["messages"] = stored_messages
+        else:
+            session_state.setdefault("messages", [])
+        
+        stored_docs = get_uploaded_docs_from_storage()
+        if stored_docs is not None:
+            session_state["uploaded_docs"] = stored_docs
+        else:
+            session_state.setdefault("uploaded_docs", [])
+    else:
+        # Clear persisted anonymous state when user authenticates
+        session_state.setdefault("messages", [])
+        session_state.setdefault("uploaded_docs", [])
+        set_messages_in_storage([])
+        set_uploaded_docs_in_storage([])
 
 
 def persist_session(session_state):
+    # For anonymous users, persist messages and uploaded_docs to browser storage so they survive page refreshes.
+    # For authenticated users, these are saved to the backend by API calls.
+    is_anonymous = not session_state.get("auth_token")
+    if is_anonymous:
+        messages = session_state.get("messages", [])
+        uploaded_docs = session_state.get("uploaded_docs", [])
+        set_messages_in_storage(messages)
+        set_uploaded_docs_in_storage(uploaded_docs)
     save_state(session_state)
 
 
 def clear_chat_state(session_state):
     session_state["messages"] = []
     session_state["uploaded_docs"] = []
+    # Also clear from browser storage for anonymous users
+    is_anonymous = not session_state.get("auth_token")
+    if is_anonymous:
+        set_messages_in_storage([])
+        set_uploaded_docs_in_storage([])
     save_state(session_state)
 
 

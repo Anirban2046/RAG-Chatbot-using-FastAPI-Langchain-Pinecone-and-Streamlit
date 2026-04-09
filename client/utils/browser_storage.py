@@ -1,8 +1,9 @@
 """
-Manage client-side browser storage (localStorage) for persisting auth_token and client_id across page refreshes.
-This is safe: client_id is a random UUID (not sensitive), and auth_token is a temporary JWT.
+Manage client-side browser storage (localStorage) for persisting auth_token, client_id, messages, and uploaded_docs across page refreshes.
+This is safe: client_id is a random UUID (not sensitive), auth_token is a temporary JWT, and messages/docs are user-generated.
 """
 
+import json
 import streamlit as st
 from uuid import uuid4
 
@@ -69,5 +70,49 @@ def set_auth_token_in_storage(token: str | None) -> None:
             st.query_params["_auth_token"] = token
         elif "_auth_token" in st.query_params:
             del st.query_params["_auth_token"]
+    except (AttributeError, Exception):
+        pass
+
+
+def get_messages_from_storage() -> list | None:
+    """Retrieve messages from browser storage (for anonymous users)."""
+    try:
+        messages_json = st.query_params.get("_messages")
+        if messages_json:
+            return json.loads(messages_json)
+    except (AttributeError, json.JSONDecodeError, Exception):
+        pass
+    return None
+
+
+def set_messages_in_storage(messages: list) -> None:
+    """Store messages in browser storage (for anonymous users)."""
+    try:
+        if messages:
+            st.query_params["_messages"] = json.dumps(messages)
+        elif "_messages" in st.query_params:
+            del st.query_params["_messages"]
+    except (AttributeError, Exception):
+        pass
+
+
+def get_uploaded_docs_from_storage() -> list | None:
+    """Retrieve uploaded_docs list from browser storage (for anonymous users)."""
+    try:
+        docs_json = st.query_params.get("_uploaded_docs")
+        if docs_json:
+            return json.loads(docs_json)
+    except (AttributeError, json.JSONDecodeError, Exception):
+        pass
+    return None
+
+
+def set_uploaded_docs_in_storage(docs: list) -> None:
+    """Store uploaded_docs list in browser storage (for anonymous users)."""
+    try:
+        if docs:
+            st.query_params["_uploaded_docs"] = json.dumps(docs)
+        elif "_uploaded_docs" in st.query_params:
+            del st.query_params["_uploaded_docs"]
     except (AttributeError, Exception):
         pass
