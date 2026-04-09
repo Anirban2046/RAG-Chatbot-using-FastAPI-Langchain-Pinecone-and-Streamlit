@@ -12,10 +12,12 @@ from utils.api import (
     update_profile_api,
 )
 from utils.state import clear_all_state, clear_chat_state, persist_session, sync_session_from_disk
+from utils.browser_storage import set_auth_token_in_storage, set_client_id_in_storage, inject_storage_script
 
 
 st.set_page_config(page_title="AI RAG Chatbot", layout="wide")
 st.title("RAG Chatbot")
+inject_storage_script()  # Inject localStorage management script at the very top
 
 
 def init_auth_state():
@@ -155,8 +157,10 @@ def open_signin_dialog():
         response = login_user(username_or_email=username_or_email, password=password)
         if response.status_code == 200:
             payload = response.json()
-            st.session_state.auth_token = payload["access_token"]
+            access_token = payload["access_token"]
+            st.session_state.auth_token = access_token
             st.session_state.auth_username = payload["username"]
+            set_auth_token_in_storage(access_token)  # Persist token across page refreshes
             if _hydrate_authenticated_state():
                 st.success("Signed in successfully")
                 st.rerun()
@@ -188,8 +192,10 @@ def open_register_dialog():
         response = register_user(username=username, email=email, password=password)
         if response.status_code == 200:
             payload = response.json()
-            st.session_state.auth_token = payload["access_token"]
+            access_token = payload["access_token"]
+            st.session_state.auth_token = access_token
             st.session_state.auth_username = payload["username"]
+            set_auth_token_in_storage(access_token)  # Persist token across page refreshes
             if _hydrate_authenticated_state():
                 st.success("Registration successful")
                 st.rerun()
@@ -287,8 +293,22 @@ def render_auth_sidebar():
                 profile = profile_response.json()
                 st.session_state.current_profile = profile
                 st.divider()
-                if st.button(profile["username"], width="stretch", key="open_profile_btn", help="View your profile"):
+                
+                # Profile section with clear visual hierarchy and interactivity cues
+                st.markdown(
+                    "<div style='text-align:center; margin-bottom:12px;'><strong>Your Profile</strong></div>",
+                    unsafe_allow_html=True,
+                )
+                
+                # Profile button with visual icon to make it more discoverable
+                if st.button(
+                    f"👤 {profile['username']} ⚙️",
+                    width="stretch",
+                    key="open_profile_btn",
+                    help="Click to view or edit your profile, change password, upload photo, and more"
+                ):
                     _open_profile_dialog()
+                
                 st.markdown(
                     f"<div style='font-size:0.82rem; color:#9ca3af; line-height:1.2; margin-bottom:24px; text-align:center;'>{profile['email'].replace('@', '&#64;')}</div>",
                     unsafe_allow_html=True,
