@@ -1,5 +1,8 @@
-from fastapi import APIRouter, Depends, File, Header, UploadFile
-from fastapi.responses import JSONResponse
+import re
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, Header, Query, UploadFile
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -7,6 +10,7 @@ from db import get_db
 from logger import logger
 from modules.auth import get_current_user_optional
 from modules.load_vectorstore import (
+    UPLOAD_DIR,
     cleanup_stale_anonymous_namespaces,
     clear_vectorstore,
     load_vectorstore,
@@ -14,6 +18,7 @@ from modules.load_vectorstore import (
 )
 from modules.principal import resolve_namespace
 from modules.user_content_store import clear_user_content, save_uploaded_documents
+from models.content import UploadedDocument
 from models.user import User
 
 
@@ -33,6 +38,11 @@ def _run_anonymous_housekeeping(namespace: str, mark_active: bool) -> None:
         mark_namespace_active(namespace)
     except Exception as e:
         logger.warning(f"Mark namespace active failed (non-fatal): {str(e)}")
+
+
+def _sanitize_filename(filename: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9._-]", "_", Path(filename).name)
+    return cleaned or ""
 
 
 @router.post("/upload_pdfs/")
@@ -87,3 +97,53 @@ async def clear_vectorstore_endpoint(
     except Exception as e:
         logger.exception(f"Error clearing Pinecone vector store for user={actor}")
         return JSONResponse(status_code=400, content={"error": "Failed to clear vector store"})
+
+
+@router.get("/preview_pdf/")
+async def preview_pdf(
+    filename: str = Query(..., min_length=1),
+    user: User | None = Depends(get_current_user_optional),
+    db: Session = Depends(get_db),
+    x_client_id: str | None = Header(default=None, alias="X-Client-Id"),
+):
+    actor = user.username if user else "anonymous"
+    try:
+        namespace = resolve_namespace(user, x_client_id)
+        namespace_dir = Path(UPLOAD_DIR) / namespace
+
+        candidate_path: Path | None = None
+        if user is not None:
+            record = (
+                db.query(UploadedDocument)
+                .filter(
+                    UploadedDocument.user_id == user.id,
+                    UploadedDocument.namespace == namespace,
+                    UploadedDocument.original_filename == filename,
+                )
+                .order_by(UploadedDocument.created_at.desc(), UploadedDocument.id.desc())
+                .first()
+            )
+            if record:
+                candidate_path = namespace_dir / Path(record.stored_filename).name
+
+        if candidate_path is None:
+            sanitized_name = _sanitize_filename(filename)
+            if not sanitized_name:
+                return JSONResponse(status_code=404, content={"error": "PDF not found"})
+            candidate_path = namespace_dir / sanitized_name
+
+        if not candidate_path.exists() or not candidate_path.is_file():
+            return JSONResponse(status_code=404, content={"error": "PDF not found"})
+
+        return FileResponse(
+            path=str(candidate_path),
+            media_type="application/pdf",
+            filename=Path(filename).name,
+            headers={"Content-Disposition": f'inline; filename="{Path(filename).name}"'},
+        )
+    except ValueError as e:
+        logger.error(f"ValueError for user={actor} on preview: {str(e)}")
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    except Exception:
+        logger.exception(f"Error serving PDF preview for user={actor}")
+        return JSONResponse(status_code=400, content={"error": "Failed to preview PDF"})

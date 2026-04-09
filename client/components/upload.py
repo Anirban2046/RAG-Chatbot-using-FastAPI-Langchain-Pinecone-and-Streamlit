@@ -1,6 +1,30 @@
 import streamlit as st
-from utils.api import upload_pdfs_api
+import base64
+
+from utils.api import get_pdf_preview_api, upload_pdfs_api
 from utils.state import persist_session
+
+
+@st.dialog("PDF Preview", width="large")
+def show_pdf_preview_dialog(filename: str, token: str | None, client_id: str | None):
+    response = get_pdf_preview_api(filename=filename, token=token, client_id=client_id)
+    if response.status_code != 200:
+        st.error(f"Unable to preview PDF: {response.text}")
+        return
+
+    encoded_pdf = base64.b64encode(response.content).decode("ascii")
+    st.markdown(f"**{filename}**")
+    st.markdown(
+        f'<iframe src="data:application/pdf;base64,{encoded_pdf}" width="100%" height="700" style="border:none;"></iframe>',
+        unsafe_allow_html=True,
+    )
+    st.download_button(
+        "Download PDF",
+        data=response.content,
+        file_name=filename,
+        mime="application/pdf",
+        use_container_width=True,
+    )
 
 
 def render_uploader():
@@ -21,5 +45,6 @@ def render_uploader():
 
     if st.session_state.get("uploaded_docs"):
         st.sidebar.caption("Uploaded PDFs in this session")
-        for name in st.session_state["uploaded_docs"]:
-            st.sidebar.write(f"- {name}")
+        for idx, name in enumerate(st.session_state["uploaded_docs"]):
+            if st.sidebar.button(f"{name}", key=f"preview_pdf_{idx}_{name}", use_container_width=True):
+                show_pdf_preview_dialog(name, token, client_id)

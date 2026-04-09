@@ -14,11 +14,6 @@ def init_auth_state():
     sync_session_from_disk(st.session_state)
     st.session_state.setdefault("signin_form_version", 0)
     st.session_state.setdefault("register_form_version", 0)
-    st.session_state.setdefault("anon_cleanup_done", False)
-
-    if not st.session_state.anon_cleanup_done:
-        _clear_anonymous_remote_vectorstore()
-        st.session_state.anon_cleanup_done = True
 
     if st.session_state.get("auth_token"):
         _hydrate_authenticated_state()
@@ -124,7 +119,6 @@ def open_signin_dialog():
     if submitted:
         response = login_user(username_or_email=username_or_email, password=password)
         if response.status_code == 200:
-            _clear_anonymous_remote_vectorstore()
             payload = response.json()
             st.session_state.auth_token = payload["access_token"]
             st.session_state.auth_username = payload["username"]
@@ -158,7 +152,6 @@ def open_register_dialog():
 
         response = register_user(username=username, email=email, password=password)
         if response.status_code == 200:
-            _clear_anonymous_remote_vectorstore()
             payload = response.json()
             st.session_state.auth_token = payload["access_token"]
             st.session_state.auth_username = payload["username"]
