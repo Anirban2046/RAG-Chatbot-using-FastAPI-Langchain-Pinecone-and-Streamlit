@@ -305,6 +305,38 @@ def load_vectorstore(uploaded_files, namespace: str):
     return file_paths
 
 
+def delete_pdf_from_vectorstore(namespace: str, filename: str):
+    """Delete a single PDF and its vectors from Pinecone and filesystem"""
+    try:
+        # Get the file stem (filename without extension) to match vector IDs
+        file_stem = Path(filename).stem
+        
+        # Delete vectors matching this file pattern: {stem}-0, {stem}-1, etc.
+        # Pinecone doesn't have a direct pattern match, so we delete by listing stats
+        # and finding vectors with matching metadata, or we use a simpler approach:
+        # delete by ID prefix pattern
+        try:
+            # Try to delete with prefix - some Pinecone API versions support this
+            index.delete(filter={"source": {"$eq": filename}}, namespace=namespace)
+        except Exception:
+            # Fallback: we'll just delete the file and rebuild the index
+            # This ensures consistency
+            pass
+        
+        # Delete the physical file
+        namespace_dir = Path(UPLOAD_DIR) / namespace
+        file_path = namespace_dir / Path(filename).name
+        if file_path.exists() and file_path.is_file():
+            file_path.unlink()
+        
+        # Rebuild the vectorstore from remaining PDFs
+        rebuild_vectorstore_from_saved_pdfs(namespace)
+        
+    except Exception as e:
+        logger.error(f"Error deleting PDF {filename} from vectorstore: {str(e)}")
+        raise
+
+
 def clear_vectorstore(namespace: str):
     _safe_delete_all_vectors(namespace)
     _remove_local_namespace_dir(namespace)

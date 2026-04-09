@@ -58,6 +58,14 @@ def clear_vectorstore_api(token: str | None = None, client_id: str | None = None
     return requests.post(f"{API_URL}/clear_vectorstore/", headers=_auth_headers(token, client_id))
 
 
+def delete_pdf_api(filename: str, token: str | None = None, client_id: str | None = None):
+    return requests.delete(
+        f"{API_URL}/delete_pdf/",
+        params={"filename": filename},
+        headers=_auth_headers(token, client_id),
+    )
+
+
 def get_pdf_preview_api(filename: str, token: str | None = None, client_id: str | None = None):
     return requests.get(
         f"{API_URL}/preview_pdf/",

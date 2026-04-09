@@ -1,7 +1,7 @@
 import streamlit as st
 import base64
 
-from utils.api import get_pdf_preview_api, upload_pdfs_api
+from utils.api import get_pdf_preview_api, upload_pdfs_api, delete_pdf_api
 from utils.state import persist_session
 
 
@@ -40,11 +40,24 @@ def render_uploader():
             st.session_state.uploaded_docs = payload.get("uploaded_docs", [f.name for f in uploaded_files])
             persist_session(st.session_state)
             st.sidebar.success("Uploaded successfully")
+            st.rerun()
         else:
             st.sidebar.error(f"Error:{response.text}")
 
     if st.session_state.get("uploaded_docs"):
         st.sidebar.caption("Uploaded PDFs in this session")
         for idx, name in enumerate(st.session_state["uploaded_docs"]):
-            if st.sidebar.button(f"{name}", key=f"preview_pdf_{idx}_{name}", width="stretch"):
-                show_pdf_preview_dialog(name, token, client_id)
+            col1, col2 = st.sidebar.columns([3, 1], gap="small")
+            with col1:
+                if st.button(f"{name}", key=f"preview_pdf_{idx}_{name}", width="stretch", help="Preview this PDF"):
+                    show_pdf_preview_dialog(name, token, client_id)
+            with col2:
+                if st.button("🗑️", key=f"delete_pdf_{idx}_{name}", help="Delete this PDF", width="content"):
+                    response = delete_pdf_api(filename=name, token=token, client_id=client_id)
+                    if response.status_code == 200:
+                        if name in st.session_state.uploaded_docs:
+                            st.session_state.uploaded_docs.remove(name)
+                        persist_session(st.session_state)
+                        st.rerun()
+                    else:
+                        st.sidebar.error(f"Error deleting PDF: {response.text}")

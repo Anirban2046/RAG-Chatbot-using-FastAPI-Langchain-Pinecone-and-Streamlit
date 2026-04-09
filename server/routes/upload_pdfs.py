@@ -13,6 +13,7 @@ from modules.load_vectorstore import (
     UPLOAD_DIR,
     cleanup_stale_anonymous_namespaces,
     clear_vectorstore,
+    delete_pdf_from_vectorstore,
     load_vectorstore,
     mark_namespace_active,
 )
@@ -147,3 +148,37 @@ async def preview_pdf(
     except Exception:
         logger.exception(f"Error serving PDF preview for user={actor}")
         return JSONResponse(status_code=400, content={"error": "Failed to preview PDF"})
+
+
+@router.delete("/delete_pdf/")
+async def delete_pdf(
+    filename: str = Query(..., min_length=1),
+    user: User | None = Depends(get_current_user_optional),
+    db: Session = Depends(get_db),
+    x_client_id: str | None = Header(default=None, alias="X-Client-Id"),
+):
+    actor = "unknown"
+    try:
+        actor = user.username if user else "anonymous"
+        namespace = resolve_namespace(user, x_client_id)
+        
+        # Delete from database if authenticated user
+        if user is not None:
+            db.query(UploadedDocument).filter(
+                UploadedDocument.user_id == user.id,
+                UploadedDocument.namespace == namespace,
+                UploadedDocument.original_filename == filename,
+            ).delete()
+            db.commit()
+        
+        # Delete from Pinecone and filesystem
+        delete_pdf_from_vectorstore(namespace, filename)
+        
+        logger.info(f"PDF {filename} deleted for user={actor}")
+        return {"message": f"PDF '{filename}' deleted successfully"}
+    except ValueError as e:
+        logger.error(f"ValueError for user={actor} on delete: {str(e)}")
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    except Exception as e:
+        logger.exception(f"Error deleting PDF {filename} for user={actor}")
+        return JSONResponse(status_code=400, content={"error": "Failed to delete PDF"})

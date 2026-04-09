@@ -287,7 +287,7 @@ def render_auth_sidebar():
                 profile = profile_response.json()
                 st.session_state.current_profile = profile
                 st.divider()
-                if st.button(profile["username"], width="stretch", key="open_profile_btn"):
+                if st.button(profile["username"], width="stretch", key="open_profile_btn", help="View your profile"):
                     _open_profile_dialog()
                 st.markdown(
                     f"<div style='font-size:0.82rem; color:#9ca3af; line-height:1.2; margin-bottom:24px; text-align:center;'>{profile['email'].replace('@', '&#64;')}</div>",
