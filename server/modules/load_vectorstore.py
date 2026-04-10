@@ -1,5 +1,4 @@
 import os
-import json
 import math
 import hashlib
 import re
@@ -17,16 +16,12 @@ from config import (
     PINECONE_API_KEY,
     PINECONE_ENV,
     PINECONE_INDEX_NAME,
-    ANON_NAMESPACE_TTL_HOURS,
-    ANON_CLEANUP_INTERVAL_SECONDS,
 )
 
 os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
 
 UPLOAD_DIR="./uploaded_docs"
 os.makedirs(UPLOAD_DIR,exist_ok=True)
-ANON_ACTIVITY_FILE = Path(UPLOAD_DIR) / ".anon_last_seen.json"
-LAST_ANON_CLEANUP_AT = 0.0
 
 
 # initialize pinecone instance
@@ -212,37 +207,6 @@ def _finalize_staged_pdf(file_path: Path, staging_path: Path):
         staging_path.unlink(missing_ok=True)
 
 
-def _read_anonymous_activity() -> dict[str, float]:
-    if not ANON_ACTIVITY_FILE.exists():
-        return {}
-    try:
-        data = json.loads(ANON_ACTIVITY_FILE.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            return {}
-        return {k: float(v) for k, v in data.items() if isinstance(k, str)}
-    except (json.JSONDecodeError, OSError, ValueError, TypeError):
-        return {}
-
-
-def _write_anonymous_activity(activity: dict[str, float]):
-    try:
-        ANON_ACTIVITY_FILE.parent.mkdir(parents=True, exist_ok=True)
-        ANON_ACTIVITY_FILE.write_text(json.dumps(activity, ensure_ascii=True), encoding="utf-8")
-    except Exception as e:
-        logger.warning(f"Failed to write anonymous activity file: {str(e)}")
-
-
-def mark_namespace_active(namespace: str):
-    if not namespace.startswith("anon-"):
-        return
-    try:
-        activity = _read_anonymous_activity()
-        activity[namespace] = time.time()
-        _write_anonymous_activity(activity)
-    except Exception as e:
-        logger.warning(f"Failed to mark namespace active: {str(e)}")
-
-
 def _remove_local_namespace_dir(namespace: str):
     namespace_dir = Path(UPLOAD_DIR) / namespace
     if not namespace_dir.exists() or not namespace_dir.is_dir():
@@ -255,53 +219,6 @@ def _remove_local_namespace_dir(namespace: str):
         if nested_dir.is_dir():
             nested_dir.rmdir()
     namespace_dir.rmdir()
-
-
-def _last_seen_for_namespace(namespace: str, activity: dict[str, float]) -> float | None:
-    if namespace in activity:
-        return float(activity[namespace])
-
-    namespace_dir = Path(UPLOAD_DIR) / namespace
-    if namespace_dir.exists():
-        return namespace_dir.stat().st_mtime
-    return None
-
-
-def cleanup_stale_anonymous_namespaces(force: bool = False) -> int:
-    global LAST_ANON_CLEANUP_AT
-
-    now = time.time()
-    if not force and now - LAST_ANON_CLEANUP_AT < ANON_CLEANUP_INTERVAL_SECONDS:
-        return 0
-
-    cutoff = now - (ANON_NAMESPACE_TTL_HOURS * 3600)
-    activity = _read_anonymous_activity()
-
-    namespace_candidates = set(k for k in activity if k.startswith("anon-"))
-    namespace_candidates.update(
-        ns for ns in _list_namespace_names() if ns.startswith("anon-")
-    )
-    upload_root = Path(UPLOAD_DIR)
-    if upload_root.exists():
-        namespace_candidates.update(
-            child.name for child in upload_root.iterdir() if child.is_dir() and child.name.startswith("anon-")
-        )
-
-    deleted = 0
-    for namespace in sorted(namespace_candidates):
-        last_seen = _last_seen_for_namespace(namespace, activity)
-        if last_seen is None or last_seen > cutoff:
-            continue
-
-        _safe_delete_all_vectors(namespace)
-        _remove_local_namespace_dir(namespace)
-        EMBEDDING_MODE_BY_NAMESPACE.pop(namespace, None)
-        activity.pop(namespace, None)
-        deleted += 1
-
-    _write_anonymous_activity(activity)
-    LAST_ANON_CLEANUP_AT = now
-    return deleted
 
 
 def _save_uploaded_files(uploaded_files, namespace: str):
@@ -361,11 +278,11 @@ def rebuild_vectorstore_from_saved_pdfs(namespace: str, force_fallback: bool = F
     _build_index_from_files(pdf_paths, namespace=namespace, force_fallback=force_fallback)
 
 def load_vectorstore(uploaded_files, namespace: str):
-    mark_namespace_active(namespace)
     file_paths = _save_uploaded_files(uploaded_files, namespace)
 
     try:
-        _build_index_from_files(file_paths, namespace=namespace)
+        # Rebuild index from ALL saved PDFs (both old and new) to preserve existing PDFs
+        rebuild_vectorstore_from_saved_pdfs(namespace=namespace)
     except EmbeddingQuotaExceeded:
         print("Gemini embedding quota exceeded; switching to fallback embeddings and rebuilding vector store.")
         rebuild_vectorstore_from_saved_pdfs(namespace=namespace, force_fallback=True)
@@ -419,41 +336,4 @@ def delete_pdf_from_vectorstore(namespace: str, filename: str):
 def clear_vectorstore(namespace: str):
     _safe_delete_all_vectors(namespace)
     _remove_local_namespace_dir(namespace)
-    if namespace.startswith("anon-"):
-        activity = _read_anonymous_activity()
-        if namespace in activity:
-            activity.pop(namespace, None)
-            _write_anonymous_activity(activity)
     EMBEDDING_MODE_BY_NAMESPACE.pop(namespace, None)
-
-
-def _list_namespace_names() -> list[str]:
-    stats = index.describe_index_stats()
-    namespaces = getattr(stats, "namespaces", None)
-    if namespaces is None and isinstance(stats, dict):
-        namespaces = stats.get("namespaces", {})
-    if not namespaces:
-        return []
-
-    if isinstance(namespaces, dict):
-        return list(namespaces.keys())
-    return []
-
-
-def clear_anonymous_vectorstores():
-    for namespace in _list_namespace_names():
-        if namespace.startswith("anon-"):
-            _safe_delete_all_vectors(namespace)
-            EMBEDDING_MODE_BY_NAMESPACE.pop(namespace, None)
-
-    upload_root = Path(UPLOAD_DIR)
-    if upload_root.exists():
-        for child in upload_root.iterdir():
-            if child.is_dir() and child.name.startswith("anon-"):
-                for nested in child.glob("**/*"):
-                    if nested.is_file():
-                        nested.unlink(missing_ok=True)
-                for nested_dir in sorted(child.glob("**/*"), reverse=True):
-                    if nested_dir.is_dir():
-                        nested_dir.rmdir()
-                child.rmdir()

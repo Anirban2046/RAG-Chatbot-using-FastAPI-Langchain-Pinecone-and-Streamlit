@@ -72,8 +72,11 @@ def render_uploader():
                     if st.button("Delete", key=f"delete_pdf_{idx}_{name}", width="stretch"):
                         response = delete_pdf_api(filename=name, token=token, client_id=client_id)
                         if response.status_code == 200:
-                            if name in st.session_state.uploaded_docs:
-                                st.session_state.uploaded_docs.remove(name)
+                            try:
+                                payload = response.json()
+                                st.session_state.uploaded_docs = payload.get("uploaded_docs", [])
+                            except Exception:
+                                st.session_state.uploaded_docs = []
                             persist_session(st.session_state)
                             st.rerun()
                         else:

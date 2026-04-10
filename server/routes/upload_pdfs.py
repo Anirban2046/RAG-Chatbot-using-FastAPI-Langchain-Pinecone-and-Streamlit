@@ -9,18 +9,22 @@ from typing import List
 from config import PDF_MAX_FILE_BYTES, PDF_MAX_FILES_PER_REQUEST, PDF_MAX_TOTAL_BYTES
 from db import get_db
 from logger import logger
+from modules.anonymous_session_store import (
+    clear_session_state,
+    get_session_state as get_anonymous_session_state,
+    set_uploaded_docs,
+    touch_session,
+)
 from modules.auth import get_current_user_optional
 from modules.load_vectorstore import (
     UPLOAD_DIR,
     _find_best_matching_file,
-    cleanup_stale_anonymous_namespaces,
     clear_vectorstore,
     delete_pdf_from_vectorstore,
     load_vectorstore,
-    mark_namespace_active,
 )
-from modules.principal import resolve_namespace
-from modules.user_content_store import clear_user_content, save_uploaded_documents
+from modules.principal import resolve_namespace, sanitize_client_id
+from modules.user_content_store import clear_user_content, save_uploaded_documents, get_user_content_state
 from models.content import UploadedDocument
 from models.user import User
 
@@ -62,19 +66,30 @@ def _validate_pdf_uploads(files: List[UploadFile]) -> None:
         )
 
 
-def _run_anonymous_housekeeping(namespace: str, mark_active: bool) -> None:
-    try:
-        cleanup_stale_anonymous_namespaces()
-    except Exception as e:
-        logger.warning(f"Cleanup failed (non-fatal): {str(e)}")
-
-    if not mark_active:
+def _append_anonymous_uploaded_docs(db: Session, client_id: str | None, new_names: list[str]) -> None:
+    if not client_id:
         return
 
-    try:
-        mark_namespace_active(namespace)
-    except Exception as e:
-        logger.warning(f"Mark namespace active failed (non-fatal): {str(e)}")
+    existing_state = get_anonymous_session_state(db, client_id)
+    merged = list(existing_state.get("uploaded_docs", []))
+    merged.extend([name for name in new_names if isinstance(name, str) and name.strip()])
+    set_uploaded_docs(db, client_id, merged)
+
+
+def _remove_anonymous_uploaded_doc(db: Session, client_id: str | None, filename: str) -> None:
+    if not client_id:
+        return
+
+    existing_state = get_anonymous_session_state(db, client_id)
+    docs = list(existing_state.get("uploaded_docs", []))
+    removed = False
+    updated_docs: list[str] = []
+    for name in docs:
+        if not removed and name == filename:
+            removed = True
+            continue
+        updated_docs.append(name)
+    set_uploaded_docs(db, client_id, updated_docs)
 
 
 def _sanitize_filename(filename: str) -> str:
@@ -92,17 +107,24 @@ async def upload_pdfs(
     actor = "unknown"
     try:
         actor = user.username if user else "anonymous"
+        sanitized_client_id = sanitize_client_id(x_client_id)
         namespace = resolve_namespace(user, x_client_id)
         _validate_pdf_uploads(files)
-        if user is None:
-            _run_anonymous_housekeeping(namespace, mark_active=True)
+        if user is None and sanitized_client_id:
+            touch_session(db, sanitized_client_id)
         stored_paths = load_vectorstore(files, namespace=namespace)
         if user is not None:
             save_uploaded_documents(db, user, files, stored_paths, namespace)
+            user_state = get_user_content_state(db, user)
+            all_uploaded_docs = user_state.get("uploaded_docs", [])
+        else:
+            _append_anonymous_uploaded_docs(db, sanitized_client_id, [file.filename for file in files])
+            existing_state = get_anonymous_session_state(db, sanitized_client_id)
+            all_uploaded_docs = existing_state.get("uploaded_docs", [])
         logger.info("Document added to vectorstore")
         return {
             "messages": "Files processed and vectorstore updated",
-            "uploaded_docs": [file.filename for file in files],
+            "uploaded_docs": all_uploaded_docs,
         }
     except ValueError as e:
         logger.error(f"ValueError for user={actor}: {str(e)}")
@@ -123,12 +145,13 @@ async def clear_vectorstore_endpoint(
     actor = "unknown"
     try:
         actor = user.username if user else "anonymous"
+        sanitized_client_id = sanitize_client_id(x_client_id)
         namespace = resolve_namespace(user, x_client_id)
-        if user is None:
-            _run_anonymous_housekeeping(namespace, mark_active=False)
         clear_vectorstore(namespace=namespace)
         if user is not None:
             clear_user_content(db, user)
+        elif sanitized_client_id:
+            clear_session_state(db, sanitized_client_id)
         logger.info(f"Pinecone vector store cleared for user={actor}")
         return {"message": "Vector store cleared"}
     except ValueError as e:
@@ -200,6 +223,7 @@ async def delete_pdf(
     actor = "unknown"
     try:
         actor = user.username if user else "anonymous"
+        sanitized_client_id = sanitize_client_id(x_client_id)
         namespace = resolve_namespace(user, x_client_id)
         
         # Delete from database if authenticated user
@@ -213,9 +237,23 @@ async def delete_pdf(
         
         # Delete from Pinecone and filesystem
         delete_pdf_from_vectorstore(namespace, filename)
+
+        if user is None:
+            _remove_anonymous_uploaded_doc(db, sanitized_client_id, filename)
+        
+        # Get updated list of remaining documents
+        if user is not None:
+            user_state = get_user_content_state(db, user)
+            remaining_docs = user_state.get("uploaded_docs", [])
+        else:
+            existing_state = get_anonymous_session_state(db, sanitized_client_id)
+            remaining_docs = existing_state.get("uploaded_docs", [])
         
         logger.info(f"PDF {filename} deleted for user={actor}")
-        return {"message": f"PDF '{filename}' deleted successfully"}
+        return {
+            "message": f"PDF '{filename}' deleted successfully",
+            "uploaded_docs": remaining_docs,
+        }
     except ValueError as e:
         logger.error(f"ValueError for user={actor} on delete: {str(e)}")
         return JSONResponse(status_code=400, content={"error": str(e)})

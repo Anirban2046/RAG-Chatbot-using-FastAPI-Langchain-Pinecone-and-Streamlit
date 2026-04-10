@@ -10,16 +10,15 @@ from typing import List
 from config import PINECONE_API_KEY, PINECONE_INDEX_NAME
 from db import get_db
 from logger import logger
+from modules.anonymous_session_store import append_chat_turn, touch_session
 from modules.auth import get_current_user_optional
 from modules.llm import get_llm_chain
 from modules.load_vectorstore import (
     EmbeddingQuotaExceeded,
     _embed_query,
-    cleanup_stale_anonymous_namespaces,
-    mark_namespace_active,
     rebuild_vectorstore_from_saved_pdfs,
 )
-from modules.principal import resolve_namespace
+from modules.principal import resolve_namespace, sanitize_client_id
 from modules.query_handlers import query_chain
 from modules.user_content_store import save_chat_turn
 from models.user import User
@@ -66,17 +65,15 @@ async def ask_question(
 ):
     actor = user.username if user else "anonymous"
     try:
+        sanitized_client_id = sanitize_client_id(x_client_id)
         namespace = resolve_namespace(user, x_client_id)
 
         if user is None:
             try:
-                cleanup_stale_anonymous_namespaces()
+                if sanitized_client_id:
+                    touch_session(db, sanitized_client_id)
             except Exception as e:
-                logger.warning(f"Cleanup failed (non-fatal): {str(e)}")
-            try:
-                mark_namespace_active(namespace)
-            except Exception as e:
-                logger.warning(f"Mark namespace active failed (non-fatal): {str(e)}")
+                logger.warning(f"Anonymous session touch failed (non-fatal): {str(e)}")
         
         logger.info(f"user={actor} query: {question}")
 
@@ -157,6 +154,12 @@ async def ask_question(
                     save_chat_turn(db, user, question, result.get("response", ""))
                 except Exception as e:
                     logger.warning(f"Failed to persist chat history for user={actor}: {str(e)}")
+            else:
+                try:
+                    if sanitized_client_id:
+                        append_chat_turn(db, sanitized_client_id, question, result.get("response", ""))
+                except Exception as e:
+                    logger.warning(f"Failed to persist anonymous chat history for client={x_client_id}: {str(e)}")
             logger.info("query successful")
             return result
         except Exception as e:

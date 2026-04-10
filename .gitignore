@@ -20,3 +20,6 @@ wheels/
 
 # UV lockfile (ignored because project uses requirements files)
 uv.lock
+
+# Tests
+tests/

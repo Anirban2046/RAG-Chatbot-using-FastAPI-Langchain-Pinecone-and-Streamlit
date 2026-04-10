@@ -60,6 +60,19 @@ def get_session_state(token: str):
     return _request("GET", f"{API_URL}/session/state", headers=_auth_headers(token))
 
 
+def get_anonymous_session_state(client_id: str):
+    return _request("GET", f"{API_URL}/session/anonymous/state", headers=_auth_headers(None, client_id))
+
+
+def save_anonymous_session_state(client_id: str, messages: list, uploaded_docs: list):
+    return _request(
+        "POST",
+        f"{API_URL}/session/anonymous/state",
+        json={"messages": messages, "uploaded_docs": uploaded_docs},
+        headers=_auth_headers(None, client_id),
+    )
+
+
 def upload_pdfs_api(files, token: str | None = None, client_id: str | None = None):
     files_payload=[ ("files",(f.name,f.read(),"application/pdf")) for f in files]
     return _request(

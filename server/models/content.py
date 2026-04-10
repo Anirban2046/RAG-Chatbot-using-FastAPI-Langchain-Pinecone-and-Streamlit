@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import relationship
 
 from db import Base
@@ -27,3 +27,17 @@ class UploadedDocument(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     user = relationship("User", back_populates="uploaded_documents")
+
+
+class AnonymousSession(Base):
+    __tablename__ = "anonymous_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    client_id = Column(String(64), unique=True, index=True, nullable=False)
+    namespace = Column(String(128), unique=True, index=True, nullable=False)
+    messages_json = Column(Text, nullable=False, default="[]")
+    uploaded_docs_json = Column(Text, nullable=False, default="[]")
+    is_closed = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    last_active_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

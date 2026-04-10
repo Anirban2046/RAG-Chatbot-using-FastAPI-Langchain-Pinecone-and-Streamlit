@@ -13,6 +13,10 @@ def _sanitize_client_id(client_id: str | None) -> str | None:
     return cleaned[:64]
 
 
+def sanitize_client_id(client_id: str | None) -> str | None:
+    return _sanitize_client_id(client_id)
+
+
 def resolve_namespace(user: User | None, client_id: str | None) -> str:
     if user is not None:
         return f"user-{user.id}"

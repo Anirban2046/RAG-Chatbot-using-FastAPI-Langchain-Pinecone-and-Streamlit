@@ -12,13 +12,20 @@ from utils.api import (
     register_user,
     update_profile_api,
 )
-from utils.state import clear_all_state, clear_chat_state, persist_session, sync_session_from_disk
-from utils.browser_storage import set_auth_token_in_storage, inject_storage_script
+from utils.state import (
+    clear_all_state,
+    clear_auth_disabled_state,
+    clear_chat_state,
+    persist_session,
+    sync_session_from_disk,
+    logout_and_reset_state,
+)
+from utils.browser_storage import bootstrap_browser_storage, set_auth_token_in_storage
 
 
 st.set_page_config(page_title="AI RAG Chatbot", layout="wide")
 st.title("RAG Chatbot")
-inject_storage_script()  # Inject localStorage management script at the very top
+bootstrap_browser_storage()
 
 
 def init_auth_state():
@@ -31,17 +38,23 @@ def init_auth_state():
     st.session_state.setdefault("edit_profile_dialog_open", False)
     st.session_state.setdefault("current_profile", None)
 
-    if st.session_state.get("auth_token"):
+    token = st.session_state.get("auth_token")
+    hydrated_token = st.session_state.get("_hydrated_auth_token")
+    if token and token != hydrated_token:
         _hydrate_authenticated_state(suppress_warnings=True)
+    elif not token:
+        st.session_state["_hydrated_auth_token"] = None
 
 
 def render_sidebar_auth_style():
     st.markdown(
         """
         <style>
-        [data-testid="stSidebar"] {
-            min-width: 380px;
-            max-width: 380px;
+        @media (min-width: 1024px) {
+            [data-testid="stSidebar"] {
+                min-width: 380px;
+                max-width: 380px;
+            }
         }
         [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
             font-size: 0.9rem;
@@ -178,6 +191,7 @@ def _hydrate_authenticated_state(suppress_warnings: bool = False):
 
     st.session_state.messages = payload.get("messages", [])
     st.session_state.uploaded_docs = payload.get("uploaded_docs", [])
+    st.session_state["_hydrated_auth_token"] = token
     persist_session(st.session_state)
     return True
 
@@ -248,6 +262,7 @@ def open_signin_dialog():
 
             st.session_state.auth_token = access_token
             st.session_state.auth_username = username
+            clear_auth_disabled_state(st.session_state)
             set_auth_token_in_storage(access_token)
             if _hydrate_authenticated_state():
                 success_container.success("Signed in successfully")
@@ -308,6 +323,7 @@ def open_register_dialog():
 
             st.session_state.auth_token = access_token
             st.session_state.auth_username = username_value
+            clear_auth_disabled_state(st.session_state)
             set_auth_token_in_storage(access_token)
             if _hydrate_authenticated_state():
                 success_container.success("Registration successful")
@@ -487,7 +503,7 @@ def render_auth_sidebar():
                         _open_profile_dialog()
                 with col2:
                     if st.button("Logout", width="stretch", key="logout_btn"):
-                        clear_all_state(st.session_state)
+                        logout_and_reset_state(st.session_state)
                         st.rerun()
 
                 if st.button(
