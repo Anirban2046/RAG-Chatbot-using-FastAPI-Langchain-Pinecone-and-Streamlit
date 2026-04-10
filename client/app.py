@@ -14,13 +14,24 @@ from utils.api import (
 )
 from utils.state import (
     clear_all_state,
-    clear_auth_disabled_state,
     clear_chat_state,
     persist_session,
     sync_session_from_disk,
     logout_and_reset_state,
 )
-from utils.browser_storage import bootstrap_browser_storage, set_auth_token_in_storage
+from utils.browser_storage import (
+    bootstrap_browser_storage,
+    set_auth_disabled_in_storage,
+    set_auth_token_in_storage,
+)
+
+try:
+    from utils.state import clear_auth_disabled_state
+except ImportError:
+    def clear_auth_disabled_state(session_state):
+        # Backward-compatible fallback for deployments serving an older utils.state module.
+        set_auth_disabled_in_storage(False)
+        session_state["_ignore_auth_cookie_until"] = 0.0
 
 
 st.set_page_config(page_title="AI RAG Chatbot", layout="wide")
