@@ -1,51 +1,94 @@
 """
 Helpers for state persistence hooks.
 
-Sensitive values (auth token, client id, messages, uploaded docs) must not be written to
-URL query parameters because URLs are shareable and persisted in browser history.
+Design:
+- Keep auth token, chat messages, and uploaded docs only in process memory.
+- Use client id as the stable browser key source.
+- Mirror client id to a query param and a cookie to survive early refresh timing.
 
-Anonymous continuity requirement:
-- Keep state across page refresh for the same browser session.
-- Drop state on app restart.
-
-Implementation note:
-- We use server-memory buckets keyed by a browser cookie fingerprint.
-- This avoids URL leakage and naturally clears when the Streamlit process restarts.
+Result:
+- Data survives browser refresh for the same browser URL/session.
+- Data is dropped on app restart.
+- Sensitive payloads (auth token/messages/docs) are not written to URLs.
 """
 
-import hashlib
 import json
 import streamlit as st
 
 # Keep a tiny bootstrap script for compatibility with existing layout/init flow.
 STORAGE_SCRIPT = """
 <script>
-// Intentionally left minimal. Sensitive session state is stored server-side session only.
+// Intentionally minimal. State persistence is handled by Python storage hooks.
 </script>
 """
 
 _BROWSER_SESSION_STATE: dict[str, dict] = {}
+CLIENT_ID_COOKIE_NAME = "ragchat_client_id"
+CLIENT_ID_QUERY_PARAM = "_client_id"
+
+
+def _set_cookie_script(cookie_name: str, cookie_value: str | None) -> str:
+    return f"""
+    <script>
+    (function() {{
+        const cookieName = {cookie_name!r};
+        const cookieValue = {cookie_value or ""!r};
+        const maxAge = cookieValue ? 60 * 60 * 24 * 30 : 0;
+        const expires = cookieValue ? `; Max-Age=${{maxAge}}` : '; Max-Age=0';
+        const secure = window.location.protocol === 'https:' ? '; Secure' : '';
+        const target = window.parent && window.parent.document ? window.parent.document : document;
+        target.cookie = `${{cookieName}}=${{encodeURIComponent(cookieValue)}}; Path=/; SameSite=Lax${{expires}}${{secure}}`;
+    }})();
+    </script>
+    """
+
+
+def _write_browser_cookie(cookie_name: str, cookie_value: str | None) -> None:
+    st.html(_set_cookie_script(cookie_name, cookie_value), width="stretch", unsafe_allow_javascript=True)
 
 
 def _browser_scope_key() -> str | None:
-    """Derive a stable browser-session key from current request cookies."""
+    """Read the explicit client-id cookie if available."""
     try:
         cookies = dict(st.context.cookies)
     except Exception:
         return None
 
-    if not cookies:
-        return None
+    client_id = cookies.get(CLIENT_ID_COOKIE_NAME)
+    if isinstance(client_id, str) and client_id.strip():
+        return client_id.strip()
+    return None
 
-    canonical = "|".join(f"{k}={cookies[k]}" for k in sorted(cookies.keys()))
-    if not canonical:
-        return None
 
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+def _query_param_client_id() -> str | None:
+    try:
+        value = st.query_params.get(CLIENT_ID_QUERY_PARAM)
+    except Exception:
+        value = None
+
+    if isinstance(value, list):
+        value = value[0] if value else None
+
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _bucket_key() -> str | None:
+    """Resolve the in-memory bucket key, preferring cookie client id, then query param client id."""
+    browser_key = _browser_scope_key()
+    if browser_key:
+        return f"cookie:{browser_key}"
+
+    query_client_id = _query_param_client_id()
+    if query_client_id:
+        return f"client:{query_client_id}"
+
+    return None
 
 
 def _get_bucket(create: bool = False) -> dict | None:
-    key = _browser_scope_key()
+    key = _bucket_key()
     if not key:
         return None
 
@@ -55,22 +98,25 @@ def _get_bucket(create: bool = False) -> dict | None:
         _BROWSER_SESSION_STATE[key] = {}
     return _BROWSER_SESSION_STATE[key]
 
+
 def inject_storage_script():
-    """Inject localStorage initialization script."""
+    """Inject compatibility bootstrap markup (no state is stored in localStorage)."""
     st.markdown(STORAGE_SCRIPT, unsafe_allow_html=True)
 
 
-def clear_legacy_query_params() -> None:
-    """Remove old query-param keys that previously carried sensitive state."""
-    try:
-        for key in ("_client_id", "_auth_token", "_messages", "_uploaded_docs"):
-            if key in st.query_params:
-                del st.query_params[key]
-    except Exception:
-        pass
-
-
 def get_client_id_from_storage() -> str | None:
+    """Read client id from query param, then cookie, then in-memory fallback bucket."""
+    value = _query_param_client_id()
+    if value:
+        return value
+
+    try:
+        value = st.context.cookies.get(CLIENT_ID_COOKIE_NAME)
+    except Exception:
+        value = None
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+
     bucket = _get_bucket(create=False)
     if not bucket:
         return None
@@ -79,22 +125,37 @@ def get_client_id_from_storage() -> str | None:
 
 
 def set_client_id_in_storage(client_id: str) -> None:
+    """Persist client id in query params, cookie, and current in-memory bucket."""
+    if client_id:
+        st.query_params[CLIENT_ID_QUERY_PARAM] = client_id
+    _write_browser_cookie(CLIENT_ID_COOKIE_NAME, client_id)
     bucket = _get_bucket(create=True)
     if bucket is not None and client_id:
         bucket["client_id"] = client_id
 
 
 def get_auth_token_from_storage() -> str | None:
-    """Sensitive state is not persisted in URL or browser-readable storage."""
-    return None
+    """Read auth token from the in-memory bucket only."""
+    bucket = _get_bucket(create=False)
+    if not bucket:
+        return None
+    token = bucket.get("auth_token")
+    return token if isinstance(token, str) and token else None
 
 
 def set_auth_token_in_storage(token: str | None) -> None:
-    """No-op by design to prevent URL leakage."""
-    return None
+    """Write auth token to the in-memory bucket only."""
+    bucket = _get_bucket(create=True)
+    if bucket is None:
+        return None
+    if token:
+        bucket["auth_token"] = token
+    else:
+        bucket.pop("auth_token", None)
 
 
 def get_messages_from_storage() -> list | None:
+    """Read anonymous chat messages from the in-memory bucket."""
     bucket = _get_bucket(create=False)
     if not bucket:
         return None
@@ -105,12 +166,14 @@ def get_messages_from_storage() -> list | None:
 
 
 def set_messages_in_storage(messages: list) -> None:
+    """Write anonymous chat messages to the in-memory bucket."""
     bucket = _get_bucket(create=True)
     if bucket is not None:
         bucket["messages"] = json.loads(json.dumps(messages, ensure_ascii=True))
 
 
 def get_uploaded_docs_from_storage() -> list | None:
+    """Read anonymous uploaded-doc metadata from the in-memory bucket."""
     bucket = _get_bucket(create=False)
     if not bucket:
         return None
@@ -121,6 +184,7 @@ def get_uploaded_docs_from_storage() -> list | None:
 
 
 def set_uploaded_docs_in_storage(docs: list) -> None:
+    """Write anonymous uploaded-doc metadata to the in-memory bucket."""
     bucket = _get_bucket(create=True)
     if bucket is not None:
         bucket["uploaded_docs"] = json.loads(json.dumps(docs, ensure_ascii=True))

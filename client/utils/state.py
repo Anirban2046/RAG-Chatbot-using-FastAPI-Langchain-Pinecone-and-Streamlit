@@ -30,11 +30,12 @@ def save_state(state):
 
 
 def sync_session_from_disk(session_state):
-    # Restore anonymous client_id/messages/docs from cookie-scoped server memory.
+    # Restore client identity and cached state from browser-scoped storage hooks.
     # This survives browser refresh and is cleared on app restart.
     stored_client_id = get_client_id_from_storage()
     if stored_client_id:
         session_state["client_id"] = stored_client_id
+        set_client_id_in_storage(stored_client_id)
     elif "client_id" not in session_state:
         new_client_id = _generate_client_id()
         session_state["client_id"] = new_client_id
@@ -42,7 +43,8 @@ def sync_session_from_disk(session_state):
     else:
         set_client_id_in_storage(session_state["client_id"])
     
-    # Auth token is intentionally session-only (never persisted to URL/query params).
+    # Auth token is restored from server-side storage keyed by client id.
+    # It is never written directly into URL payloads.
     stored_token = get_auth_token_from_storage()
     if stored_token:
         session_state["auth_token"] = stored_token
@@ -51,7 +53,7 @@ def sync_session_from_disk(session_state):
     
     session_state.setdefault("auth_username", None)
     
-    # Anonymous messages/docs are restored from cookie-scoped server memory.
+    # Anonymous messages/docs are restored from server-side storage.
     # Authenticated messages/docs are fetched from the backend during _hydrate_authenticated_state().
     is_anonymous = not session_state.get("auth_token")
     if is_anonymous:

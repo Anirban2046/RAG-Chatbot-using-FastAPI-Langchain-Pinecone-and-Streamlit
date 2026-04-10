@@ -13,7 +13,7 @@ from utils.api import (
     update_profile_api,
 )
 from utils.state import clear_all_state, clear_chat_state, persist_session, sync_session_from_disk
-from utils.browser_storage import clear_legacy_query_params, set_auth_token_in_storage, inject_storage_script
+from utils.browser_storage import set_auth_token_in_storage, inject_storage_script
 
 
 st.set_page_config(page_title="AI RAG Chatbot", layout="wide")
@@ -22,7 +22,6 @@ inject_storage_script()  # Inject localStorage management script at the very top
 
 
 def init_auth_state():
-    clear_legacy_query_params()
     sync_session_from_disk(st.session_state)
     st.session_state.setdefault("signin_form_version", 0)
     st.session_state.setdefault("register_form_version", 0)
@@ -158,23 +157,6 @@ def _parse_json_response(response):
         return None
 
 
-def _clear_remote_vectorstore():
-    try:
-        token = st.session_state.get("auth_token")
-        client_id = st.session_state.get("client_id")
-        clear_vectorstore_api(token=token, client_id=client_id)
-    except Exception:
-        pass
-
-
-def _clear_anonymous_remote_vectorstore():
-    try:
-        client_id = st.session_state.get("client_id")
-        clear_vectorstore_api(token=None, client_id=client_id)
-    except Exception:
-        pass
-
-
 def _hydrate_authenticated_state(suppress_warnings: bool = False):
     token = st.session_state.get("auth_token")
     if not token:
@@ -266,7 +248,7 @@ def open_signin_dialog():
 
             st.session_state.auth_token = access_token
             st.session_state.auth_username = username
-            set_auth_token_in_storage(access_token)  # Security hook (no-op): token is session-only.
+            set_auth_token_in_storage(access_token)
             if _hydrate_authenticated_state():
                 success_container.success("Signed in successfully")
                 st.rerun()
@@ -281,9 +263,25 @@ def open_register_dialog():
     error_container = st.empty()
     success_container = st.empty()
 
-    username = st.text_input("Username", autocomplete="username", key=f"register_username_{form_version}", value="")
-    email = st.text_input("Email", autocomplete="email", key=f"register_email_{form_version}", value="")
-    password = st.text_input("Password", type="password", autocomplete="new-password", key=f"register_password_{form_version}", value="")
+    username = st.text_input(
+        "Username",
+        autocomplete="username",
+        key=f"register_username_{form_version}",
+        value="",
+    )
+    email = st.text_input(
+        "Email",
+        autocomplete="email",
+        key=f"register_email_{form_version}",
+        value="",
+    )
+    password = st.text_input(
+        "Password",
+        type="password",
+        autocomplete="new-password",
+        key=f"register_password_{form_version}",
+        value="",
+    )
     confirm_password = st.text_input(
         "Confirm Password",
         type="password",
@@ -310,7 +308,7 @@ def open_register_dialog():
 
             st.session_state.auth_token = access_token
             st.session_state.auth_username = username_value
-            set_auth_token_in_storage(access_token)  # Security hook (no-op): token is session-only.
+            set_auth_token_in_storage(access_token)
             if _hydrate_authenticated_state():
                 success_container.success("Registration successful")
                 st.rerun()
@@ -395,11 +393,29 @@ def open_edit_profile_dialog():
     success_container = st.empty()
 
     form_version = st.session_state.edit_profile_form_version
-    full_name = st.text_input("Name", value=profile.get("full_name") or "", key=f"edit_full_name_{form_version}")
-    username = st.text_input("Username", value=profile.get("username") or "", key=f"edit_username_{form_version}")
-    email = st.text_input("Email", value=profile.get("email") or "", key=f"edit_email_{form_version}")
+    full_name = st.text_input(
+        "Name",
+        value=profile.get("full_name") or "",
+        key=f"edit_full_name_{form_version}",
+    )
+    username = st.text_input(
+        "Username",
+        value=profile.get("username") or "",
+        key=f"edit_username_{form_version}",
+    )
+    email = st.text_input(
+        "Email",
+        value=profile.get("email") or "",
+        key=f"edit_email_{form_version}",
+    )
     photo = st.file_uploader("Photo", type=["png", "jpg", "jpeg", "webp"], key=f"edit_photo_{form_version}")
-    password = st.text_input("New Password", type="password", autocomplete="new-password", key=f"edit_password_{form_version}", value="")
+    password = st.text_input(
+        "New Password",
+        type="password",
+        autocomplete="new-password",
+        key=f"edit_password_{form_version}",
+        value="",
+    )
     confirm_password = st.text_input(
         "Repeat New Password",
         type="password",
